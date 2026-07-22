@@ -1,3 +1,4 @@
+import java.io.FileInputStream
 import java.util.Properties
 
 plugins {
@@ -13,6 +14,16 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Release signing. Local dev builds stay unsigned (no keystore.properties on disk); CI writes
+// this file from GitHub Actions secrets before building. Never commit keystore.properties or
+// the .jks it points at — both are covered by this module's .gitignore.
+val keystorePropertiesFile = file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        FileInputStream(keystorePropertiesFile).use { load(it) }
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "page.osmosis.collievoice"
@@ -23,6 +34,16 @@ android {
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+    }
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
     }
     buildTypes {
         getByName("debug") {
@@ -39,6 +60,9 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = true
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))

@@ -1,0 +1,65 @@
+name: Release
+
+# Builds a signed release APK and attaches it to a GitHub Release whenever a vX.Y.Z tag is
+# pushed. The toolchain (Rust + Android SDK/NDK + cargo-tauri) is the same
+# .tools/Dockerfile.build used for local dev builds, cached across runs via GitHub Actions'
+# Docker layer cache so this doesn't redo the ~20min from-scratch compile every release.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build toolchain image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: .tools/Dockerfile.build
+          tags: collie-voice-toolchain:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Write keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.jks"
+          cat > src-tauri/gen/android/app/keystore.properties <<EOF
+          storeFile=$RUNNER_TEMP/release.jks
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          EOF
+
+      - name: Build signed APK
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -v "$RUNNER_TEMP:$RUNNER_TEMP" \
+            -w /workspace \
+            collie-voice-toolchain \
+            cargo tauri android build
+
+      - name: Locate APK
+        id: apk
+        run: |
+          apk=$(find src-tauri/gen/android/app/build/outputs/apk/universal/release -name "*.apk" | head -1)
+          echo "path=$apk" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.apk.outputs.path }}
+          generate_release_notes: true
