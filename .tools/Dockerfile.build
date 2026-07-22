@@ -1,0 +1,56 @@
+# Build/lint/test toolchain for the Collie Voice Commands Tauri Android app.
+# Not a runtime image — this only ever gets `docker run`, never deployed. Built once, reused by
+# every script in .tools/. Rebuild with .tools/build-image.sh after touching this file.
+FROM rust:1.94-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openjdk-17-jdk-headless \
+        unzip \
+        curl \
+        ca-certificates \
+        libwebkit2gtk-4.1-dev \
+        libssl-dev \
+        libgtk-3-dev \
+        libayatana-appindicator3-dev \
+        librsvg2-dev \
+        pkg-config \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV ANDROID_HOME=/opt/android-sdk
+ENV ANDROID_SDK_ROOT=${ANDROID_HOME}
+# Pinned versions — bump deliberately, not silently, since sdkmanager has no "latest that works" flag.
+ENV ANDROID_CMDLINE_TOOLS_VERSION=11076708
+ENV ANDROID_PLATFORM_VERSION=34
+ENV ANDROID_BUILD_TOOLS_VERSION=34.0.0
+ENV ANDROID_NDK_VERSION=27.2.12479018
+ENV NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}
+ENV ANDROID_NDK_HOME=${NDK_HOME}
+ENV PATH=${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}
+
+RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
+    curl -fsSL -o /tmp/cmdline-tools.zip \
+        "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMDLINE_TOOLS_VERSION}_latest.zip" && \
+    unzip -q /tmp/cmdline-tools.zip -d ${ANDROID_HOME}/cmdline-tools && \
+    mv ${ANDROID_HOME}/cmdline-tools/cmdline-tools ${ANDROID_HOME}/cmdline-tools/latest && \
+    rm /tmp/cmdline-tools.zip
+
+RUN yes | sdkmanager --licenses >/dev/null && \
+    sdkmanager \
+        "platform-tools" \
+        "platforms;android-${ANDROID_PLATFORM_VERSION}" \
+        "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" \
+        "ndk;${ANDROID_NDK_VERSION}"
+
+RUN rustup target add \
+        aarch64-linux-android \
+        armv7-linux-androideabi \
+        i686-linux-android \
+        x86_64-linux-android
+
+RUN cargo install tauri-cli --version "^2" --locked
+
+WORKDIR /workspace
