@@ -1,0 +1,28 @@
+/* RATION — spacing & geometry tokens
+ * A tight 4px-ish rhythm. Corners are nearly square — 2px on controls, 3px
+ * on cards. Nothing is round except status dots. */
+
+:root {
+  --space-1:  4px;
+  --space-2:  6px;
+  --space-3:  8px;
+  --space-4:  10px;
+  --space-5:  12px;
+  --space-6:  14px;  /* default screen gutter */
+  --space-7:  18px;  /* section gap */
+  --space-8:  24px;
+  --space-9:  32px;
+  --space-10: 40px;  /* setup / hero top padding */
+
+  /* corner radii — retro-sharp */
+  --radius-control: 2px; /* buttons, inputs, chips */
+  --radius-card:    3px; /* cards, panels, toasts */
+  --radius-dot:     50%; /* status dots only */
+
+  /* borders */
+  --border-width: 1px;   /* everything is a 1px hairline */
+
+  /* layout */
+  --screen-gutter: 14px;
+  --tap-target:    44px; /* min touch target */
+}

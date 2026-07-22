@@ -3,55 +3,80 @@
   <head>
     <meta charset="utf-8" />
     <title>Collie Voice Commands</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      body { font-family: sans-serif; max-width: 480px; margin: 1rem auto; padding: 0 1rem; }
-      fieldset { margin-bottom: 1rem; }
-      label { display: block; margin-top: 0.5rem; font-size: 0.85rem; }
-      input, textarea { width: 100%; box-sizing: border-box; padding: 0.4rem; }
-      textarea { height: 4rem; }
-      button { margin-top: 0.5rem; padding: 0.5rem 1rem; }
-      #status { white-space: pre-wrap; margin-top: 1rem; }
-      #status.error { color: #b00020; }
-      details summary { cursor: pointer; }
-    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <link rel="stylesheet" href="styles/styles.css" />
+    <link rel="stylesheet" href="styles/app.css" />
   </head>
-  <body>
-    <h1>Collie Voice Commands</h1>
+  <body class="kv-scanlines">
+    <header class="app-bar" id="app-bar">
+      <div class="app-bar__row">
+        <div class="app-bar__brand">COLLIE<span class="cursor">_</span></div>
+        <div class="app-bar__actions">
+          <span class="chip" id="net-chip"><span class="chip__dot"></span>NET</span>
+          <span class="chip" id="key-chip">KEY</span>
+          <button class="app-bar__gear" id="settings-btn" title="Settings">⚙</button>
+        </div>
+      </div>
+      <div class="talking-to-bar" id="talking-to-bar">
+        <div class="talking-to-bar__pane">
+          <span>&gt;</span>
+          <span class="status-dot status-dot--idle" id="talking-to-dot"></span>
+          <span class="truncate" id="talking-to-name">no pane selected</span>
+        </div>
+        <span class="chip" id="talking-to-status">—</span>
+      </div>
+    </header>
 
-    <label for="command">Command</label>
-    <textarea id="command" placeholder="Type or dictate a command…"></textarea>
-    <button id="send">Send</button>
-    <div id="status"></div>
-    <audio id="player" controls style="width: 100%; margin-top: 0.5rem; display: none"></audio>
+    <header class="back-header" id="back-header" style="display: none">
+      <button class="back-header__back" id="back-btn">&lt;</button>
+      <div class="back-header__title" id="back-header-title"></div>
+      <span class="chip" id="back-header-chip" style="display: none"></span>
+    </header>
 
-    <details>
-      <summary>Settings</summary>
-      <fieldset>
-        <label for="collie_base_url">Collie base URL</label>
-        <input id="collie_base_url" type="text" />
+    <div class="now-playing" id="now-playing" style="display: none">
+      <span class="now-playing__label">▶ NOW PLAYING</span>
+      <div class="now-playing__waveform waveform" id="now-playing-waveform"></div>
+      <span class="now-playing__time" id="now-playing-time">0:00</span>
+      <button class="now-playing__toggle" id="now-playing-toggle">❚❚</button>
+    </div>
 
-        <label for="openrouter_api_key">OpenRouter API key</label>
-        <input id="openrouter_api_key" type="password" />
+    <main class="screen" id="screen"></main>
 
-        <label for="reply_model">Reply resolution model</label>
-        <input id="reply_model" type="text" />
+    <footer class="input-dock" id="input-dock">
+      <input
+        class="input-dock__field"
+        id="command-input"
+        type="text"
+        placeholder="&gt; dictate a command"
+        autocomplete="off"
+      />
+      <button class="btn btn--lg" id="talk-btn">▮ TALK</button>
+    </footer>
 
-        <label for="summarize_model">Summarization model</label>
-        <input id="summarize_model" type="text" />
-
-        <label for="tts_model">TTS model</label>
-        <input id="tts_model" type="text" />
-
-        <label for="tts_voice">TTS voice</label>
-        <input id="tts_voice" type="text" />
-
-        <label for="tts_format">TTS audio format</label>
-        <input id="tts_format" type="text" />
-
-        <button id="save-settings">Save settings</button>
-      </fieldset>
-    </details>
+    <div class="blocked-overlay" id="blocked-overlay">
+      <div class="blocked-overlay__backdrop" id="blocked-overlay-backdrop"></div>
+      <div class="blocked-overlay__sheet card card--accent">
+        <div class="blocked-overlay__header">
+          <span class="blocked-overlay__header-dot"></span>
+          <span class="blocked-overlay__header-label">ATTENTION NEEDED</span>
+        </div>
+        <div class="blocked-overlay__pane-row">
+          <span>&gt;</span>
+          <span class="truncate" id="blocked-pane-name" style="flex: 1"></span>
+          <span class="card__time" id="blocked-since"></span>
+        </div>
+        <div class="blocked-overlay__prompt" id="blocked-prompt"></div>
+        <div class="blocked-overlay__actions">
+          <button class="btn btn--lg blocked-overlay__voice-reply" id="blocked-voice-reply">▮ VOICE REPLY</button>
+          <button class="btn btn--outline btn--lg" id="blocked-yes">Y</button>
+          <button class="btn btn--danger btn--lg" id="blocked-no">N</button>
+        </div>
+        <div class="blocked-overlay__footer">
+          <button id="blocked-snooze">snooze 5m</button> ·
+          <button id="blocked-dismiss">dismiss</button>
+        </div>
+      </div>
+    </div>
 
     <script src="app.js"></script>
   </body>

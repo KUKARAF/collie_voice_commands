@@ -1,0 +1,8 @@
+/* RATION — webfonts
+ * Two Google Fonts drive the entire brand:
+ *   Press Start 2P — pixel/bitmap display face (titles, labels, buttons, chips)
+ *   VT323          — phosphor terminal face (body, data values, inputs)
+ * Pulled from Google Fonts; the fallback stack ('Courier New', monospace) in
+ * typography.css covers the offline case gracefully if the CDN is unreachable. */
+
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap');

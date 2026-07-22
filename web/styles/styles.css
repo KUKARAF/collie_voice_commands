@@ -1,0 +1,8 @@
+/* RATION design system — global stylesheet entry point.
+ * An @import manifest only — no rules live here. */
+
+@import url("tokens/fonts.css");
+@import url("tokens/colors.css");
+@import url("tokens/typography.css");
+@import url("tokens/spacing.css");
+@import url("tokens/effects.css");

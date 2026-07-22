@@ -3,7 +3,7 @@
 // they stay here as the accurate contract for features that read the rest of the snapshot later.
 #![allow(dead_code)]
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -16,7 +16,7 @@ pub enum CollieError {
 
 pub type Result<T> = std::result::Result<T, CollieError>;
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentStatus {
     Idle,
@@ -26,14 +26,14 @@ pub enum AgentStatus {
     Unknown,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum BridgeStatus {
     Connected,
     Disconnected,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentView {
     pub pane_id: String,
@@ -53,7 +53,7 @@ pub struct AgentView {
     pub session_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceView {
     pub workspace_id: String,
@@ -65,7 +65,7 @@ pub struct WorkspaceView {
     pub pane_count: u32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TabView {
     pub tab_id: String,
@@ -76,7 +76,7 @@ pub struct TabView {
     pub pane_count: u32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionSummary {
     pub name: String,
@@ -87,14 +87,14 @@ pub struct SessionSummary {
     pub blocked: u32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DeviceAuth {
     pub enforced: bool,
     pub device: Option<String>,
     pub authorized: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateStatus {
     pub current: String,
@@ -105,13 +105,13 @@ pub struct UpdateStatus {
     pub checked_at: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationsStatus {
     pub snoozed_until: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapshotResponse {
     pub bridge: BridgeStatus,
@@ -133,7 +133,7 @@ pub struct SnapshotResponse {
     pub ts: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PaneReadResponse {
     pub pane_id: String,
@@ -142,7 +142,7 @@ pub struct PaneReadResponse {
     pub revision: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActionResponse {
     pub ok: bool,

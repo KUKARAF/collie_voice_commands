@@ -1,0 +1,54 @@
+/* RATION — color tokens
+ * A CRT-phosphor palette: near-black green-tinted backgrounds, one bright
+ * phosphor-green accent, warning orange and danger red. Lifted verbatim from
+ * dev.kv.apk.ui.theme.KvTheme. Dark mode is the ONLY mode. */
+
+:root {
+  /* ---- base ramp (raw values) ---- */
+  --kv-bg:          #070B07; /* app background — near-black, green-tinted */
+  --kv-panel:       #0C120C; /* card / panel surface */
+  --kv-panel-2:     #0F160F; /* raised surface variant */
+  --kv-input-bg:    #070D07; /* input wells, recessed fields */
+
+  --kv-accent:      #79F279; /* phosphor green — THE brand color */
+  --kv-accent-ink:  #06210A; /* near-black green, text on accent fills */
+  --kv-orange:      #FFB13D; /* warning / over-limit / section titles */
+  --kv-orange-ink:  #1A0F00;
+  --kv-danger:      #FF6B6B; /* error / way-over-limit / destructive */
+  --kv-danger-ink:  #1A0000;
+
+  --kv-ink:         #E6F0E6; /* primary text — soft phosphor white */
+  --kv-dim:         #728C72; /* secondary text, captions, meta */
+  --kv-faint:       #243024; /* borders, dividers, faintest text */
+  --kv-placeholder: #3F5840; /* input placeholder text */
+
+  /* ---- semantic aliases ---- */
+  --surface-bg:        var(--kv-bg);
+  --surface-card:      var(--kv-panel);
+  --surface-raised:    var(--kv-panel-2);
+  --surface-input:     var(--kv-input-bg);
+
+  --text-primary:      var(--kv-ink);
+  --text-secondary:    var(--kv-dim);
+  --text-faint:        var(--kv-faint);
+  --text-accent:       var(--kv-accent);
+  --text-on-accent:    var(--kv-accent-ink);
+  --text-placeholder:  var(--kv-placeholder);
+
+  --border-default:    var(--kv-faint);
+  --border-accent:     rgba(121, 242, 121, 0.55); /* corner brackets, focus */
+
+  --color-good:        var(--kv-accent); /* under limit, healthy */
+  --color-warn:        var(--kv-orange); /* approaching / over limit */
+  --color-bad:         var(--kv-danger); /* blown budget, errors */
+
+  /* ---- heatmap ramp (GitHub-style contribution grid) ----
+   * Encodes a day's snack spend: empty → small (green) → over the daily share
+   * (orange) → blew the day (red).
+   * Higher level = more PLN spent on snacks that day. */
+  --heat-0: #0E150E; /* no data logged */
+  --heat-1: #1E5226; /* light day, well under */
+  --heat-2: #3FA348; /* moderate, within budget */
+  --heat-3: #FFB13D; /* over the daily share */
+  --heat-4: #FF6B6B; /* way over — blew the day */
+}

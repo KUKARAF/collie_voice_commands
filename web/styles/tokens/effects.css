@@ -1,0 +1,46 @@
+/* RATION — effects: glow, scanlines, brackets
+ * No drop shadows. Depth comes from 1px borders, corner brackets, an ambient
+ * scanline overlay and a faint phosphor glow on key accent text. Use glow
+ * sparingly — wordmark, active readouts, the blinking cursor. Not on body copy. */
+
+:root {
+  /* phosphor text glow — apply to accent display text only */
+  --glow-accent: 0 0 6px rgba(121, 242, 121, 0.45);
+  --glow-orange: 0 0 6px rgba(255, 177, 61, 0.40);
+  --glow-danger: 0 0 6px rgba(255, 107, 107, 0.40);
+
+  /* scanline overlay — lay over a full-screen ::after, pointer-events:none. */
+  --scanline: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 2px,
+    rgba(0, 0, 0, 0.22) 2px,
+    rgba(0, 0, 0, 0.22) 3px
+  );
+
+  /* timing — only two animations: a 1200ms ease pulse (dots) and a ~1100ms
+   * hard-step cursor blink. No bounces, no spring, no slides. */
+  --pulse-duration: 1200ms;
+  --blink-duration: 1100ms;
+}
+
+/* drop-in scanline layer */
+.kv-scanlines::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--scanline);
+  z-index: 50;
+}
+
+/* pulsing status dot */
+@keyframes kv-pulse {
+  0%   { opacity: 1; }
+  100% { opacity: 0.3; }
+}
+/* hard-step blinking cursor (no fade — on for half, off for half) */
+@keyframes kv-blink {
+  0%, 49%   { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}

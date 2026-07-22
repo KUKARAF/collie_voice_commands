@@ -3,6 +3,7 @@ use std::fs;
 use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub collie_base_url: String,
     pub openrouter_api_key: String,

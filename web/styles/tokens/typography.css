@@ -1,0 +1,29 @@
+/* RATION — typography tokens
+ * Two faces, sharply separated by role:
+ *   --font-pixel (Press Start 2P): structural / shouty — titles, labels,
+ *     buttons, chips. ALWAYS uppercase, tiny sizes, slight letter-spacing.
+ *     Never used for paragraphs or numbers you need to read fast.
+ *   --font-term  (VT323): everything readable — body copy, data values,
+ *     input text. Mixed case OK, generous sizes (it renders small).
+ * Pixel sizes are deliberately small (7–22px) because the bitmap face reads
+ * large; VT323 runs 14–19px. */
+
+:root {
+  --font-pixel: 'Press Start 2P', 'Courier New', monospace;
+  --font-term:  'VT323', 'Courier New', monospace;
+
+  /* pixel scale (display / structural) */
+  --type-display:  22px;  /* wordmark, splash */
+  --type-title:    13px;  /* screen titles */
+  --type-heading:  10px;  /* card titles, group headings */
+  --type-label:    8px;   /* field labels, button text */
+  --type-chip:     7px;   /* chips, tags, status pills */
+  --tracking-pixel: 0.06em; /* the only letter-spacing the pixel face needs */
+
+  /* terminal scale (readable / data) */
+  --type-body:     18px;  /* body copy, list values */
+  --type-data:     17px;  /* inline data, secondary values */
+  --type-meta:     14px;  /* footnotes, timestamps, hints */
+  --type-jumbo:    34px;  /* big terminal readouts (counters, totals) */
+  --leading-term:  1.05;  /* VT323 is tight by design */
+}
