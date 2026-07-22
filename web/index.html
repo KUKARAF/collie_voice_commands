@@ -4,9 +4,55 @@
     <meta charset="utf-8" />
     <title>Collie Voice Commands</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: sans-serif; max-width: 480px; margin: 1rem auto; padding: 0 1rem; }
+      fieldset { margin-bottom: 1rem; }
+      label { display: block; margin-top: 0.5rem; font-size: 0.85rem; }
+      input, textarea { width: 100%; box-sizing: border-box; padding: 0.4rem; }
+      textarea { height: 4rem; }
+      button { margin-top: 0.5rem; padding: 0.5rem 1rem; }
+      #status { white-space: pre-wrap; margin-top: 1rem; }
+      #status.error { color: #b00020; }
+      details summary { cursor: pointer; }
+    </style>
   </head>
   <body>
     <h1>Collie Voice Commands</h1>
-    <p>Scaffold placeholder — UI not built yet.</p>
+
+    <label for="command">Command</label>
+    <textarea id="command" placeholder="Type or dictate a command…"></textarea>
+    <button id="send">Send</button>
+    <div id="status"></div>
+    <audio id="player" controls style="width: 100%; margin-top: 0.5rem; display: none"></audio>
+
+    <details>
+      <summary>Settings</summary>
+      <fieldset>
+        <label for="collie_base_url">Collie base URL</label>
+        <input id="collie_base_url" type="text" />
+
+        <label for="openrouter_api_key">OpenRouter API key</label>
+        <input id="openrouter_api_key" type="password" />
+
+        <label for="reply_model">Reply resolution model</label>
+        <input id="reply_model" type="text" />
+
+        <label for="summarize_model">Summarization model</label>
+        <input id="summarize_model" type="text" />
+
+        <label for="tts_model">TTS model</label>
+        <input id="tts_model" type="text" />
+
+        <label for="tts_voice">TTS voice</label>
+        <input id="tts_voice" type="text" />
+
+        <label for="tts_format">TTS audio format</label>
+        <input id="tts_format" type="text" />
+
+        <button id="save-settings">Save settings</button>
+      </fieldset>
+    </details>
+
+    <script src="app.js"></script>
   </body>
 </html>

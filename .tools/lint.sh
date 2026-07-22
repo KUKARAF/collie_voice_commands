@@ -4,4 +4,4 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source .tools/lib.sh
 
-docker_run bash -c 'cargo fmt --check && cargo clippy --all-targets -- -D warnings'
+docker_run bash -c 'cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings'

@@ -6,4 +6,4 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source .tools/lib.sh
 
-docker_run cargo test "$@"
+docker_run bash -c 'cd src-tauri && cargo test "$@"' _ "$@"

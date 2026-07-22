@@ -45,6 +45,8 @@ RUN yes | sdkmanager --licenses >/dev/null && \
         "build-tools;${ANDROID_BUILD_TOOLS_VERSION}" \
         "ndk;${ANDROID_NDK_VERSION}"
 
+RUN rustup component add rustfmt clippy
+
 RUN rustup target add \
         aarch64-linux-android \
         armv7-linux-androideabi \
