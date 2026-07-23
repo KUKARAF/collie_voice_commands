@@ -505,8 +505,13 @@ fn classification_system_prompt(max_words: u32, multi_pane: bool) -> String {
          blocked, asking a question, or needs the operator to choose or confirm something). \
          Write `summary` as the spoken line itself — strong summarization, ONLY the absolute \
          necessities: what was accomplished or what went wrong, and if a decision is needed, \
-         exactly what the operator must decide. No filler, no pleasantries, no restating the \
-         request.{scope_note} Hard limit: {max_words} words or fewer."
+         exactly what the operator must decide. CRITICAL: be concrete, never vague — name the \
+         actual file/command/error/value involved. \"the task completed\" or \"something needs \
+         your attention\" or \"a command needs approval\" are USELESS to someone who can't see \
+         the screen; \"created src/auth.rs and all tests pass\" or \"npm install failed: \
+         EACCES on /usr/local/lib\" or \"approve running rm -rf build/?\" are what's actually \
+         needed. No filler, no pleasantries, no restating the request.{scope_note} Hard limit: \
+         {max_words} words or fewer."
     )
 }
 
