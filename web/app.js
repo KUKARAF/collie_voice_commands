@@ -1,6 +1,7 @@
 const invoke = window.__TAURI__.core.invoke;
 
-const TRANSCRIPT_KEY = "collie_transcript";
+const SUPERVISOR_ID = "supervisor";
+const TRANSCRIPTS_KEY = "collie_transcripts";
 const CURRENT_PANE_KEY = "collie_current_pane";
 const AUTOPLAY_KEY = "collie_autoplay";
 const SPEAK_BLOCKED_KEY = "collie_speak_blocked";
@@ -12,28 +13,49 @@ const state = {
   snapshot: null,
   bridgeReachable: null,
   prevStatus: {}, // paneId -> status, to edge-detect transitions into "blocked"
-  currentPaneId: localStorage.getItem(CURRENT_PANE_KEY) || null,
-  transcript: loadTranscript(),
+  // A real Collie pane id, or the literal SUPERVISOR_ID. New installs start on Supervisor
+  // since it can route anywhere, rather than erroring with "no pane selected."
+  currentPaneId: localStorage.getItem(CURRENT_PANE_KEY) || SUPERVISOR_ID,
+  transcripts: loadTranscripts(), // { [paneId | "supervisor"]: Turn[] }
   blockedPane: null, // { paneId, name, prompt } currently shown in the overlay
   dismissedBlocked: new Set(), // paneIds snoozed/dismissed until they clear "blocked"
-  pending: null, // in-flight turn while send_command is running
   audio: null,
 };
 
 // ---------- storage ----------
 
-function loadTranscript() {
+function loadTranscripts() {
   try {
-    const raw = localStorage.getItem(TRANSCRIPT_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const raw = localStorage.getItem(TRANSCRIPTS_KEY);
+    return raw ? JSON.parse(raw) : {};
   } catch {
-    return [];
+    return {};
   }
 }
 
-function saveTranscript() {
-  const trimmed = state.transcript.slice(-MAX_TRANSCRIPT);
-  localStorage.setItem(TRANSCRIPT_KEY, JSON.stringify(trimmed));
+function saveTranscripts() {
+  const capped = {};
+  for (const [paneId, turns] of Object.entries(state.transcripts)) {
+    capped[paneId] = turns.slice(-MAX_TRANSCRIPT);
+  }
+  state.transcripts = capped;
+  localStorage.setItem(TRANSCRIPTS_KEY, JSON.stringify(capped));
+}
+
+function pushTurn(paneId, turn) {
+  if (!state.transcripts[paneId]) state.transcripts[paneId] = [];
+  state.transcripts[paneId].push(turn);
+}
+
+/// Turn ids are globally unique, but which pane's bucket they live in isn't known by the
+/// caller (e.g. a link from the conversation view) — search all buckets.
+function findTurnAnywhere(id) {
+  for (const paneId of Object.keys(state.transcripts)) {
+    const list = state.transcripts[paneId];
+    const index = list.findIndex((t) => t.id === id);
+    if (index !== -1) return { turn: list[index], paneId, index };
+  }
+  return { turn: null, paneId: null, index: -1 };
 }
 
 function getBoolPref(key, fallback) {
@@ -214,10 +236,17 @@ function renderChrome(view) {
 }
 
 function updateTalkingToBar() {
-  const pane = findPane(state.snapshot, state.currentPaneId);
-  document.getElementById("talking-to-name").textContent = paneDisplayName(pane);
   const dot = document.getElementById("talking-to-dot");
   const chip = document.getElementById("talking-to-status");
+  if (state.currentPaneId === SUPERVISOR_ID) {
+    document.getElementById("talking-to-name").textContent = "SUPERVISOR · fleet-wide";
+    dot.className = "status-dot status-dot--done";
+    chip.className = "chip chip--accent";
+    chip.textContent = "AUTO";
+    return;
+  }
+  const pane = findPane(state.snapshot, state.currentPaneId);
+  document.getElementById("talking-to-name").textContent = paneDisplayName(pane);
   const meta = statusMeta(pane ? pane.status : "unknown");
   dot.className = "status-dot " + meta.dot;
   chip.className = "chip " + meta.chip;
@@ -226,10 +255,32 @@ function updateTalkingToBar() {
 
 // ---------- conversation screen ----------
 
-function turnCardHtml(turn, { linkToDetail }) {
-  const openAttr = linkToDetail ? `data-turn="${turn.id}"` : "";
+// Single-pane turns carry one sentMode/sentContent; supervisor turns carry `dispatches`, one
+// per pane it touched (or none at all, when it just answered from fleet status).
+function sentSectionHtml(turn) {
+  if (turn.isSupervisor) {
+    if (!turn.dispatches || turn.dispatches.length === 0) return "";
+    return turn.dispatches
+      .map((d) => {
+        const label = d.sentMode === "keys" ? "SENT · KEYS" : "SENT · TYPED";
+        const cls = d.sentMode === "keys" ? "sent-box sent-box--keys" : "sent-box";
+        return `<div>
+          <div class="card__section-label">${escapeHtml(d.paneName || d.paneId)} — ${label}</div>
+          <div class="${cls}">${escapeHtml(d.sentContent)}</div>
+        </div>`;
+      })
+      .join("");
+  }
   const sentLabel = turn.sentMode === "keys" ? "SENT · KEYS" : "SENT · TYPED";
   const sentBoxClass = turn.sentMode === "keys" ? "sent-box sent-box--keys" : "sent-box";
+  return `<div>
+    <div class="card__section-label">${sentLabel}</div>
+    <div class="${sentBoxClass}">${escapeHtml(turn.sentContent || turn.inputText)}</div>
+  </div>`;
+}
+
+function turnCardHtml(turn, { linkToDetail }) {
+  const openAttr = linkToDetail ? `data-turn="${turn.id}"` : "";
   let audioHtml = "";
   if (turn.summary) {
     audioHtml = `
@@ -258,10 +309,7 @@ function turnCardHtml(turn, { linkToDetail }) {
         <span class="card__time">${timeAgo(turn.timestamp)}</span>
       </div>
       <div class="card__you-text">"${escapeHtml(turn.inputText)}"</div>
-      <div>
-        <div class="card__section-label">${sentLabel}</div>
-        <div class="${sentBoxClass}">${escapeHtml(turn.sentContent || turn.inputText)}</div>
-      </div>
+      ${sentSectionHtml(turn)}
       ${audioHtml}
       ${turn.summary ? `<div class="turn-actions">
         <a href="#/turn/${turn.id}">▸ raw output</a>
@@ -272,24 +320,27 @@ function turnCardHtml(turn, { linkToDetail }) {
 
 function renderConversation() {
   const screen = document.getElementById("screen");
-  if (state.transcript.length === 0 && !state.pending) {
-    screen.innerHTML = `<div class="empty-state">no turns yet — dictate or type a command below</div>`;
+  const turns = state.transcripts[state.currentPaneId] || [];
+  if (turns.length === 0) {
+    const hint =
+      state.currentPaneId === SUPERVISOR_ID
+        ? "no turns yet — ask the supervisor to check on or dispatch to your fleet"
+        : "no turns yet — dictate or type a command below";
+    screen.innerHTML = `<div class="empty-state">${hint}</div>`;
     return;
   }
-  const turns = state.transcript.slice().reverse(); // newest last visually handled by scroll
-  let html = state.transcript.map((t) => turnCardHtml(t, { linkToDetail: true })).join("");
-  screen.innerHTML = html;
+  screen.innerHTML = turns.map((t) => turnCardHtml(t, { linkToDetail: true })).join("");
   screen.querySelectorAll("[data-replay]").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      const turn = state.transcript.find((t) => t.id === btn.dataset.replay);
+      const turn = turns.find((t) => t.id === btn.dataset.replay);
       if (turn && turn.audioBase64) playAudio(turn.audioBase64, turn.audioFormat);
     });
   });
   screen.querySelectorAll("[data-turn]").forEach((card) => {
     card.addEventListener("click", () => setHash(`turn/${card.dataset.turn}`));
   });
-  state.transcript.forEach((t) => {
+  turns.forEach((t) => {
     if (t.summary) {
       const wf = document.getElementById(`wf-${t.id}`);
       if (wf) renderWaveform(wf, 18, null);
@@ -300,15 +351,43 @@ function renderConversation() {
 
 // ---------- turn detail screen ----------
 
+// One "menu resolved" card (if the reply was sent as keys) + one raw-output toggle card, for a
+// single pane's dispatch. `domId` must be unique within the turn-detail screen — a supervisor
+// turn renders one of these per dispatched pane.
+function dispatchDetailHtml(domId, { sentMode, sentContent, preSendContext, rawOutput, menuLabel, rawLabel }) {
+  let html = "";
+  if (sentMode === "keys") {
+    const context = stripAnsi(preSendContext || "").trim().split("\n").slice(-4).join("\n");
+    html += `
+      <div class="card card--accent">
+        <div class="card__label" style="color:var(--kv-orange); margin-bottom:9px;">${menuLabel ? escapeHtml(menuLabel) + " · " : ""}MENU RESOLVED · AUTO</div>
+        <pre style="white-space:pre-wrap; font-family:var(--font-term); font-size:var(--type-data); color:var(--kv-ink); margin:0 0 8px;">${escapeHtml(context)}</pre>
+        <div class="card__section-label">KEYS SENT</div>
+        <div class="sent-box sent-box--keys">${escapeHtml(sentContent)}</div>
+      </div>`;
+  }
+  const rawText = stripAnsi(rawOutput || "");
+  html += `
+    <div class="card" style="padding:0">
+      <div class="raw-output__header" data-toggle-raw="${domId}">
+        <span class="card__label" style="color:var(--kv-accent)">▾ RAW OUTPUT${rawLabel ? " · " + escapeHtml(rawLabel) : ""}</span>
+        <span class="card__time">tap to toggle</span>
+      </div>
+      <div class="raw-output" id="raw-${domId}" style="display:none">
+        <pre>${escapeHtml(rawText) || "(empty)"}</pre>
+      </div>
+    </div>`;
+  return html;
+}
+
 function renderTurnDetail(id) {
   const screen = document.getElementById("screen");
-  const turn = state.transcript.find((t) => t.id === id);
+  const { turn, index } = findTurnAnywhere(id);
   if (!turn) {
     screen.innerHTML = `<div class="empty-state">turn not found</div>`;
     return;
   }
-  document.getElementById("back-header-title").textContent =
-    "TURN " + (state.transcript.findIndex((t) => t.id === id) + 1);
+  document.getElementById("back-header-title").textContent = "TURN " + (index + 1);
   if (turn.status !== "pending") {
     const chip = document.getElementById("back-header-chip");
     chip.style.display = "inline-flex";
@@ -316,52 +395,62 @@ function renderTurnDetail(id) {
     chip.textContent = turn.status === "error" ? "FAILED" : "DONE";
   }
 
-  let menuHtml = "";
-  if (turn.sentMode === "keys") {
-    const context = stripAnsi(turn.preSendContext || "").trim().split("\n").slice(-4).join("\n");
-    menuHtml = `
-      <div class="card card--accent">
-        <div class="card__label" style="color:var(--kv-orange); margin-bottom:9px;">MENU RESOLVED · AUTO</div>
-        <pre style="white-space:pre-wrap; font-family:var(--font-term); font-size:var(--type-data); color:var(--kv-ink); margin:0 0 8px;">${escapeHtml(context)}</pre>
-        <div class="card__section-label">KEYS SENT</div>
-        <div class="sent-box sent-box--keys">${escapeHtml(turn.sentContent)}</div>
-      </div>`;
+  let detailHtml = "";
+  if (turn.isSupervisor) {
+    for (const d of turn.dispatches || []) {
+      const label = d.paneName || d.paneId;
+      detailHtml += dispatchDetailHtml(`${turn.id}-${d.paneId}`, {
+        sentMode: d.sentMode,
+        sentContent: d.sentContent,
+        preSendContext: d.preSendContext,
+        rawOutput: d.rawOutput,
+        menuLabel: label,
+        rawLabel: label,
+      });
+    }
+  } else {
+    detailHtml = dispatchDetailHtml(turn.id, {
+      sentMode: turn.sentMode,
+      sentContent: turn.sentContent,
+      preSendContext: turn.preSendContext,
+      rawOutput: turn.rawOutput,
+      menuLabel: null,
+      rawLabel: turn.paneId,
+    });
   }
 
-  const rawText = stripAnsi(turn.rawOutput || "");
-  const rawHtml = `
-    <div class="card" style="padding:0">
-      <div class="raw-output__header" data-toggle-raw="${turn.id}">
-        <span class="card__label" style="color:var(--kv-accent)">▾ RAW OUTPUT${turn.paneId ? " · " + escapeHtml(turn.paneId) : ""}</span>
-        <span class="card__time">tap to toggle</span>
-      </div>
-      <div class="raw-output" id="raw-${turn.id}" style="display:none">
-        <pre>${escapeHtml(rawText) || "(empty)"}</pre>
-      </div>
-    </div>`;
-
-  screen.innerHTML = turnCardHtml(turn, { linkToDetail: false }) + menuHtml + rawHtml;
+  screen.innerHTML = turnCardHtml(turn, { linkToDetail: false }) + detailHtml;
   const replay = screen.querySelector("[data-replay]");
   if (replay) {
     replay.addEventListener("click", () => turn.audioBase64 && playAudio(turn.audioBase64, turn.audioFormat));
   }
   const wf = document.getElementById(`wf-${turn.id}`);
   if (wf) renderWaveform(wf, 18, null);
-  const toggle = screen.querySelector("[data-toggle-raw]");
-  if (toggle) {
+  screen.querySelectorAll("[data-toggle-raw]").forEach((toggle) => {
     toggle.addEventListener("click", () => {
-      const el = document.getElementById(`raw-${turn.id}`);
+      const el = document.getElementById(`raw-${toggle.dataset.toggleRaw}`);
       el.style.display = el.style.display === "none" ? "block" : "none";
     });
-  }
+  });
 }
 
 // ---------- fleet screen ----------
 
 function renderFleet() {
   const screen = document.getElementById("screen");
+  const supervisorTalking = state.currentPaneId === SUPERVISOR_ID ? " fleet-pane--talking" : "";
+  let html = `<div class="fleet-pane${supervisorTalking}" data-pane="${SUPERVISOR_ID}" style="margin-bottom:18px;">
+    <span class="status-dot status-dot--done"></span>
+    <div class="fleet-pane__body">
+      <div class="fleet-pane__name">SUPERVISOR</div>
+      <div class="fleet-pane__meta">fleet-wide — decides which pane(s) to act on, or answers directly</div>
+    </div>
+  </div>`;
+
   if (!state.snapshot) {
-    screen.innerHTML = `<div class="empty-state">no data yet — waiting for Collie…</div>`;
+    html += `<div class="empty-state">no data yet — waiting for Collie…</div>`;
+    screen.innerHTML = html;
+    wireFleetPaneClicks(screen);
     return;
   }
   const groups = new Map();
@@ -371,10 +460,12 @@ function renderFleet() {
     groups.get(key).push(pane);
   }
   if (groups.size === 0) {
-    screen.innerHTML = `<div class="empty-state">no panes running</div>`;
+    html += `<div class="empty-state">no panes running</div>`;
+    screen.innerHTML = html;
+    wireFleetPaneClicks(screen);
     return;
   }
-  let html = `<div class="fleet-session">
+  html += `<div class="fleet-session">
     <div class="fleet-session__header">
       <span class="status-dot ${state.bridgeReachable ? "status-dot--working" : "status-dot--blocked"}"></span>
       <span class="fleet-session__label">${escapeHtml((state.settings && state.settings.collieBaseUrl) || "collie")}</span>
@@ -398,6 +489,10 @@ function renderFleet() {
   }
   html += `</div><div class="empty-state">— end of fleet —</div>`;
   screen.innerHTML = html;
+  wireFleetPaneClicks(screen);
+}
+
+function wireFleetPaneClicks(screen) {
   screen.querySelectorAll("[data-pane]").forEach((row) => {
     row.addEventListener("click", () => {
       state.currentPaneId = row.dataset.pane;
@@ -593,40 +688,63 @@ function quickBlockedReply(text) {
 // ---------- sending commands ----------
 
 async function sendCommand(text, paneIdOverride) {
-  const paneId = paneIdOverride || state.currentPaneId;
+  // An explicit override (e.g. a blocked-pane quick reply) always targets that specific pane,
+  // regardless of what's currently selected — only the un-overridden "current selection" can be
+  // the supervisor.
+  const targetPaneId = paneIdOverride || state.currentPaneId;
+  const isSupervisor = !paneIdOverride && targetPaneId === SUPERVISOR_ID;
+  const bucketKey = isSupervisor ? SUPERVISOR_ID : targetPaneId || "unassigned";
+
   const turn = {
     id: `t${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
-    paneId: paneId || null,
+    paneId: isSupervisor ? null : targetPaneId || null,
+    isSupervisor,
     timestamp: Date.now(),
     inputText: text,
     status: "pending",
   };
-  state.transcript.push(turn);
-  saveTranscript();
+  pushTurn(bucketKey, turn);
+  saveTranscripts();
   if (parseHash().view === "conversation") renderConversation();
 
   try {
-    const result = await invoke("send_command", { text, paneId: paneId || null });
-    Object.assign(turn, {
-      status: "done",
-      paneId: result.paneId,
-      sentMode: result.sentMode,
-      sentContent: result.sentContent,
-      preSendContext: result.preSendContext,
-      rawOutput: result.rawOutput,
-      summary: result.summary,
-      audioBase64: result.audioBase64,
-      audioFormat: state.settings ? state.settings.ttsFormat : "mp3",
-    });
-    if (!state.currentPaneId) {
-      state.currentPaneId = result.paneId;
-      localStorage.setItem(CURRENT_PANE_KEY, result.paneId);
+    const audioFormat = state.settings ? state.settings.ttsFormat : "mp3";
+    let audioBase64;
+    if (isSupervisor) {
+      const result = await invoke("send_supervisor_command", { text });
+      Object.assign(turn, {
+        status: "done",
+        dispatches: result.dispatches,
+        summary: result.summary,
+        audioBase64: result.audioBase64,
+        audioFormat,
+      });
+      audioBase64 = result.audioBase64;
+    } else {
+      const result = await invoke("send_command", { text, paneId: targetPaneId || null });
+      const d = result.dispatch;
+      Object.assign(turn, {
+        status: "done",
+        paneId: d.paneId,
+        sentMode: d.sentMode,
+        sentContent: d.sentContent,
+        preSendContext: d.preSendContext,
+        rawOutput: d.rawOutput,
+        summary: result.summary,
+        audioBase64: result.audioBase64,
+        audioFormat,
+      });
+      audioBase64 = result.audioBase64;
+      if (!paneIdOverride && !state.currentPaneId) {
+        state.currentPaneId = d.paneId;
+        localStorage.setItem(CURRENT_PANE_KEY, d.paneId);
+      }
     }
-    if (getBoolPref(AUTOPLAY_KEY, true)) playAudio(result.audioBase64, turn.audioFormat);
+    if (getBoolPref(AUTOPLAY_KEY, true)) playAudio(audioBase64, turn.audioFormat);
   } catch (err) {
     Object.assign(turn, { status: "error", error: String(err) });
   }
-  saveTranscript();
+  saveTranscripts();
   if (parseHash().view === "conversation") renderConversation();
   renderChrome(parseHash().view);
 }
@@ -702,9 +820,49 @@ function wireGlobalControls() {
   });
 }
 
+// Swipe in from the right edge to open Settings — a second path to Settings alongside the gear
+// button, for one-handed use where the top-right gear is awkward to reach.
+function wireSwipeToSettings() {
+  const EDGE_PX = 24; // gesture must start within this many px of the right edge
+  const MIN_DELTA_X = 60; // minimum leftward travel to count as a swipe
+  const MAX_DELTA_Y = 80; // too much vertical drift means it's a scroll, not a swipe
+  let startX = null;
+  let startY = null;
+  let startedAtEdge = false;
+
+  document.addEventListener(
+    "touchstart",
+    (e) => {
+      const t = e.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      startedAtEdge = window.innerWidth - t.clientX <= EDGE_PX;
+    },
+    { passive: true },
+  );
+
+  document.addEventListener(
+    "touchend",
+    (e) => {
+      if (!startedAtEdge || startX == null) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - startX;
+      const dy = Math.abs(t.clientY - startY);
+      if (dx <= -MIN_DELTA_X && dy < MAX_DELTA_Y && parseHash().view !== "settings") {
+        setHash("settings");
+      }
+      startX = null;
+      startY = null;
+      startedAtEdge = false;
+    },
+    { passive: true },
+  );
+}
+
 async function init() {
   wireGlobalControls();
   wireBlockedOverlay();
+  wireSwipeToSettings();
   try {
     state.settings = await invoke("get_settings");
   } catch {

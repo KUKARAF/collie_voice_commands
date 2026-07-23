@@ -26,6 +26,20 @@ pub enum AgentStatus {
     Unknown,
 }
 
+impl AgentStatus {
+    /// The wire/display form — same as the `#[serde(rename_all = "lowercase")]` above, exposed
+    /// for building LLM-facing text (the supervisor's fleet listing) without a serde round-trip.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AgentStatus::Idle => "idle",
+            AgentStatus::Working => "working",
+            AgentStatus::Blocked => "blocked",
+            AgentStatus::Done => "done",
+            AgentStatus::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum BridgeStatus {
