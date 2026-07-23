@@ -6,12 +6,48 @@ use tauri::{AppHandle, Manager};
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub collie_base_url: String,
+    /// The effective, ready-to-use OpenRouter key. Either pasted in directly, or auto-cached
+    /// here after `ensure_openrouter_key` provisions one via kv_manager — callers that just
+    /// need to make an OpenRouter request never need to know which.
+    #[serde(default)]
     pub openrouter_api_key: String,
     pub reply_model: String,
     pub summarize_model: String,
     pub tts_model: String,
     pub tts_voice: String,
     pub tts_format: String,
+    /// kv_manager (kv.osmosis.page) fields, only needed to auto-provision an OpenRouter key
+    /// when `openrouter_api_key` is empty — see `commands::ensure_openrouter_key`.
+    #[serde(default)]
+    pub kv_manager_base_url: String,
+    #[serde(default)]
+    pub kv_manager_api_key: String,
+    #[serde(default = "default_kv_manager_entry_key")]
+    pub kv_manager_entry_key: String,
+    /// Whether to speak each outcome category aloud at all — every turn still gets classified
+    /// and summarized either way (for the transcript text), these only gate the TTS call.
+    #[serde(default = "default_true")]
+    pub speak_issue_reports: bool,
+    #[serde(default = "default_true")]
+    pub speak_success_reports: bool,
+    #[serde(default = "default_true")]
+    pub speak_decision_needed: bool,
+    /// Hard cap enforced by instruction in the summarization prompt (not a JSON schema
+    /// constraint — there's no way to make a model count words at the schema level).
+    #[serde(default = "default_tts_max_words")]
+    pub tts_max_words: u32,
+}
+
+fn default_kv_manager_entry_key() -> String {
+    "openrouter_management_key".into()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_tts_max_words() -> u32 {
+    40
 }
 
 impl Default for Settings {
@@ -21,11 +57,22 @@ impl Default for Settings {
             openrouter_api_key: String::new(),
             // Starting points only — verify against OpenRouter's live catalog/pricing and
             // change here in Settings whenever.
-            reply_model: "openai/gpt-4o-mini".into(),
+            reply_model: "minimax/minimax-m3".into(),
             summarize_model: "openai/gpt-4o-mini".into(),
-            tts_model: "openai/gpt-4o-mini-tts".into(),
-            tts_voice: "alloy".into(),
+            // "openai/gpt-4o-mini-tts" doesn't exist on OpenRouter's TTS endpoint (confirmed by
+            // a live 400 from a real device) — Kokoro is lightweight, open-weight, and its
+            // slug/voice naming is stable upstream. "af_heart" is Kokoro's own documented
+            // default voice.
+            tts_model: "hexgrad/kokoro-82m".into(),
+            tts_voice: "af_heart".into(),
             tts_format: "mp3".into(),
+            kv_manager_base_url: String::new(),
+            kv_manager_api_key: String::new(),
+            kv_manager_entry_key: default_kv_manager_entry_key(),
+            speak_issue_reports: true,
+            speak_success_reports: true,
+            speak_decision_needed: true,
+            tts_max_words: default_tts_max_words(),
         }
     }
 }
@@ -39,15 +86,27 @@ fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir.join("settings.json"))
 }
 
+// Model that shipped as the default before a live device confirmed OpenRouter 400s on it —
+// self-heal existing installs that already have it cached, rather than requiring a manual
+// Settings edit for a value the user never chose themselves.
+const RETIRED_TTS_MODEL: &str = "openai/gpt-4o-mini-tts";
+
 pub fn load(app: &AppHandle) -> Result<Settings, String> {
     let path = settings_path(app)?;
-    match fs::read_to_string(&path) {
+    let mut settings: Settings = match fs::read_to_string(&path) {
         Ok(contents) => {
-            serde_json::from_str(&contents).map_err(|e| format!("parsing settings.json: {e}"))
+            serde_json::from_str(&contents).map_err(|e| format!("parsing settings.json: {e}"))?
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
-        Err(e) => Err(format!("reading settings.json: {e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Settings::default()),
+        Err(e) => return Err(format!("reading settings.json: {e}")),
+    };
+    if settings.tts_model == RETIRED_TTS_MODEL {
+        let healed = Settings::default();
+        settings.tts_model = healed.tts_model;
+        settings.tts_voice = healed.tts_voice;
+        save(app, &settings)?;
     }
+    Ok(settings)
 }
 
 pub fn save(app: &AppHandle, settings: &Settings) -> Result<(), String> {

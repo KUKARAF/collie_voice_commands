@@ -3,8 +3,6 @@ const invoke = window.__TAURI__.core.invoke;
 const SUPERVISOR_ID = "supervisor";
 const TRANSCRIPTS_KEY = "collie_transcripts";
 const CURRENT_PANE_KEY = "collie_current_pane";
-const AUTOPLAY_KEY = "collie_autoplay";
-const SPEAK_BLOCKED_KEY = "collie_speak_blocked";
 const MAX_TRANSCRIPT = 200;
 const POLL_MS = 6000;
 
@@ -56,15 +54,6 @@ function findTurnAnywhere(id) {
     if (index !== -1) return { turn: list[index], paneId, index };
   }
   return { turn: null, paneId: null, index: -1 };
-}
-
-function getBoolPref(key, fallback) {
-  const raw = localStorage.getItem(key);
-  return raw === null ? fallback : raw === "1";
-}
-
-function setBoolPref(key, value) {
-  localStorage.setItem(key, value ? "1" : "0");
 }
 
 // ---------- small helpers ----------
@@ -279,17 +268,31 @@ function sentSectionHtml(turn) {
   </div>`;
 }
 
+const CATEGORY_META = {
+  success: { chip: "chip--accent", label: "SUCCESS" },
+  issue: { chip: "chip--orange", label: "ISSUE" },
+  decision_needed: { chip: "chip--orange", label: "DECISION NEEDED" },
+};
+
 function turnCardHtml(turn, { linkToDetail }) {
   const openAttr = linkToDetail ? `data-turn="${turn.id}"` : "";
   let audioHtml = "";
   if (turn.summary) {
-    audioHtml = `
-      <div class="audio-strip">
-        <div class="audio-strip__row">
+    const cat = CATEGORY_META[turn.category];
+    const catChip = cat ? `<span class="chip ${cat.chip}">${cat.label}</span>` : "";
+    // A category can be toggled off in Settings — still classified/summarized for the
+    // transcript, just not spoken, so there's no audio to play back.
+    const player = turn.audioBase64
+      ? `<div class="audio-strip__row">
           <button class="audio-strip__play" data-replay="${turn.id}">▶</button>
           <div class="waveform" id="wf-${turn.id}"></div>
           <span class="audio-strip__time">${turn.audioDuration || "0:00"}</span>
-        </div>
+        </div>`
+      : "";
+    audioHtml = `
+      <div class="audio-strip">
+        ${catChip ? `<div style="margin-bottom:8px;">${catChip}</div>` : ""}
+        ${player}
         <div class="audio-strip__summary">${escapeHtml(turn.summary)}</div>
       </div>`;
   } else if (turn.status === "pending") {
@@ -313,7 +316,7 @@ function turnCardHtml(turn, { linkToDetail }) {
       ${audioHtml}
       ${turn.summary ? `<div class="turn-actions">
         <a href="#/turn/${turn.id}">▸ raw output</a>
-        <button class="is-muted" data-replay="${turn.id}">↻ replay</button>
+        ${turn.audioBase64 ? `<button class="is-muted" data-replay="${turn.id}">↻ replay</button>` : ""}
       </div>` : ""}
     </div>`;
 }
@@ -507,8 +510,6 @@ function wireFleetPaneClicks(screen) {
 function renderSettings() {
   const screen = document.getElementById("screen");
   const s = state.settings || {};
-  const autoplay = getBoolPref(AUTOPLAY_KEY, true);
-  const speakBlocked = getBoolPref(SPEAK_BLOCKED_KEY, true);
   screen.innerHTML = `
     <div class="settings-section">
       <div class="settings-section__label">CONNECTION</div>
@@ -587,19 +588,63 @@ function renderSettings() {
     </div>
 
     <div class="settings-section">
+      <div class="settings-section__label">KV MANAGER</div>
+      <p style="font-size:var(--type-meta); color:var(--kv-dim); margin:-4px 0 12px;">
+        optional — auto-provisions the OpenRouter key above from kv.osmosis.page instead of
+        pasting one in by hand. Leave blank to just paste a key manually.
+      </p>
+      <div class="card">
+        <div class="settings-row">
+          <div class="settings-row__field" style="width:100%">
+            <span class="settings-row__field-label">KV MANAGER BASE URL</span>
+            <input type="text" id="f-kv-manager-url" value="${escapeHtml(s.kvManagerBaseUrl || "")}" />
+          </div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row__field" style="width:100%">
+            <span class="settings-row__field-label">KV MANAGER API KEY</span>
+            <input type="password" id="f-kv-manager-key" value="${escapeHtml(s.kvManagerApiKey || "")}" />
+          </div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row__field" style="width:100%">
+            <span class="settings-row__field-label">KV ENTRY NAME (HOLDS THE OPENROUTER MANAGEMENT KEY)</span>
+            <input type="text" id="f-kv-manager-entry" value="${escapeHtml(s.kvManagerEntryKey || "")}" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-section">
       <div class="settings-section__label">VOICE OUT</div>
+      <p style="font-size:var(--type-meta); color:var(--kv-dim); margin:-4px 0 12px;">
+        every turn is still classified and summarized in the transcript either way — these only
+        control which categories actually get spoken aloud.
+      </p>
       <div class="card">
         <div class="settings-row">
           <label style="display:flex; align-items:center; gap:9px; width:100%;">
-            <input type="checkbox" id="f-autoplay" ${autoplay ? "checked" : ""} />
-            <span style="font-size:var(--type-data); color:var(--kv-ink);">auto-play summary per turn</span>
+            <input type="checkbox" id="f-speak-success" ${s.speakSuccessReports !== false ? "checked" : ""} />
+            <span style="font-size:var(--type-data); color:var(--kv-ink);">voice success reports</span>
           </label>
         </div>
         <div class="settings-row">
           <label style="display:flex; align-items:center; gap:9px; width:100%;">
-            <input type="checkbox" id="f-speak-blocked" ${speakBlocked ? "checked" : ""} />
-            <span style="font-size:var(--type-data); color:var(--kv-ink);">speak blocked-pane alerts aloud</span>
+            <input type="checkbox" id="f-speak-issue" ${s.speakIssueReports !== false ? "checked" : ""} />
+            <span style="font-size:var(--type-data); color:var(--kv-ink);">voice issue reports</span>
           </label>
+        </div>
+        <div class="settings-row">
+          <label style="display:flex; align-items:center; gap:9px; width:100%;">
+            <input type="checkbox" id="f-speak-decision" ${s.speakDecisionNeeded !== false ? "checked" : ""} />
+            <span style="font-size:var(--type-data); color:var(--kv-ink);">voice decision-needed questions</span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row__field" style="width:100%">
+            <span class="settings-row__field-label">MAX WORDS PER SPOKEN SUMMARY</span>
+            <input type="text" inputmode="numeric" id="f-tts-max-words" value="${escapeHtml(String(s.ttsMaxWords ?? 40))}" />
+          </div>
         </div>
       </div>
     </div>
@@ -607,9 +652,6 @@ function renderSettings() {
     <button class="btn btn--lg" id="save-settings" style="align-self:flex-start">SAVE</button>
     <div class="empty-state" id="settings-status"></div>
   `;
-
-  document.getElementById("f-autoplay").addEventListener("change", (e) => setBoolPref(AUTOPLAY_KEY, e.target.checked));
-  document.getElementById("f-speak-blocked").addEventListener("change", (e) => setBoolPref(SPEAK_BLOCKED_KEY, e.target.checked));
 
   document.getElementById("save-settings").addEventListener("click", async () => {
     const newSettings = {
@@ -620,6 +662,13 @@ function renderSettings() {
       ttsModel: document.getElementById("f-tts-model").value.trim(),
       ttsVoice: document.getElementById("f-tts-voice").value.trim(),
       ttsFormat: document.getElementById("f-tts-format").value.trim(),
+      kvManagerBaseUrl: document.getElementById("f-kv-manager-url").value.trim(),
+      kvManagerApiKey: document.getElementById("f-kv-manager-key").value.trim(),
+      kvManagerEntryKey: document.getElementById("f-kv-manager-entry").value.trim(),
+      speakSuccessReports: document.getElementById("f-speak-success").checked,
+      speakIssueReports: document.getElementById("f-speak-issue").checked,
+      speakDecisionNeeded: document.getElementById("f-speak-decision").checked,
+      ttsMaxWords: parseInt(document.getElementById("f-tts-max-words").value, 10) || 40,
     };
     const status = document.getElementById("settings-status");
     try {
@@ -642,7 +691,8 @@ function showBlockedOverlay(pane, promptText) {
   document.getElementById("blocked-since").textContent = "blocked";
   document.getElementById("blocked-overlay").classList.add("is-open");
 
-  if (getBoolPref(SPEAK_BLOCKED_KEY, true) && state.settings && state.settings.openrouterApiKey) {
+  // A blocked pane is exactly a "decision needed" event — same toggle governs both.
+  if (state.settings && state.settings.openrouterApiKey && state.settings.speakDecisionNeeded !== false) {
     invoke("speak", { text: `${state.blockedPane.name} needs you` })
       .then((audioBase64) => playAudio(audioBase64, state.settings.ttsFormat))
       .catch(() => {});
@@ -716,6 +766,7 @@ async function sendCommand(text, paneIdOverride) {
         status: "done",
         dispatches: result.dispatches,
         summary: result.summary,
+        category: result.category,
         audioBase64: result.audioBase64,
         audioFormat,
       });
@@ -731,6 +782,7 @@ async function sendCommand(text, paneIdOverride) {
         preSendContext: d.preSendContext,
         rawOutput: d.rawOutput,
         summary: result.summary,
+        category: result.category,
         audioBase64: result.audioBase64,
         audioFormat,
       });
@@ -740,7 +792,9 @@ async function sendCommand(text, paneIdOverride) {
         localStorage.setItem(CURRENT_PANE_KEY, d.paneId);
       }
     }
-    if (getBoolPref(AUTOPLAY_KEY, true)) playAudio(audioBase64, turn.audioFormat);
+    // The backend already decided whether this category should be spoken — an empty string
+    // means it was deliberately skipped (toggled off in Settings), not a failure.
+    if (audioBase64) playAudio(audioBase64, turn.audioFormat);
   } catch (err) {
     Object.assign(turn, { status: "error", error: String(err) });
   }
@@ -867,6 +921,16 @@ async function init() {
     state.settings = await invoke("get_settings");
   } catch {
     state.settings = null;
+  }
+  if (state.settings && !state.settings.openrouterApiKey) {
+    // No key cached yet — try to auto-provision one via kv_manager. Silently no-ops (leaves
+    // settings unchanged) if kv_manager isn't configured either; Settings/send flows already
+    // surface "no key" clearly in that case.
+    try {
+      state.settings = await invoke("ensure_openrouter_key");
+    } catch {
+      // ignore — nothing configured to provision from, user pastes a key manually instead
+    }
   }
   renderApp();
   startPolling();

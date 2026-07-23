@@ -261,7 +261,7 @@ impl CollieClient {
 
 /// Pane ids are placed directly in the URL path — encode defensively rather than assume
 /// they're always plain alphanumerics.
-fn percent_encode(s: &str) -> String {
+pub(crate) fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {

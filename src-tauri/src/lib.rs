@@ -1,5 +1,6 @@
 mod collie;
 mod commands;
+mod kvmanager;
 mod openrouter;
 mod settings;
 
@@ -24,6 +25,7 @@ pub fn run() {
             commands::get_snapshot,
             commands::read_pane,
             commands::speak,
+            commands::ensure_openrouter_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

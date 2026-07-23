@@ -6,28 +6,27 @@ use tokio::time::{sleep, Duration};
 use crate::collie::{
     find_focused_pane, AgentStatus, CollieClient, PaneReadResponse, SnapshotResponse,
 };
-use crate::openrouter::OpenRouterClient;
+use crate::kvmanager::KvManagerClient;
+use crate::openrouter::{self, OpenRouterClient};
 use crate::settings::{self, Settings};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(1500);
 const POLL_TIMEOUT_ITERATIONS: u32 = 60; // ~90s — no stronger "done" signal exists than status.
 const CONTEXT_CHARS: usize = 4000; // pre-send/raw-output context kept for the turn-detail UI.
 
-const SUMMARY_SYSTEM_PROMPT: &str = "You summarize what a terminal-based AI coding agent just \
-    did, for someone who will only hear this read aloud and can't see the screen. Be concise \
-    (2-4 sentences), plain language, no markdown, no code blocks — describe outcomes, not raw \
-    output.";
-
-const SUPERVISOR_SUMMARY_SYSTEM_PROMPT: &str = "You summarize what happened across one or more \
-    terminal panes, each running an AI coding agent, for someone who will only hear this read \
-    aloud and can't see the screen. Name each pane you mention. Be concise (a sentence or two \
-    per pane), plain language, no markdown, no code blocks — describe outcomes, not raw output.";
-
 #[derive(Debug, Deserialize)]
 struct ResolvedReply {
     reply: String,
     #[serde(default)]
     keys: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Classification {
+    /// "success" | "issue" | "decision_needed" — which of Settings' three speak-toggles gates
+    /// whether this actually gets synthesized to audio.
+    category: String,
+    summary: String,
 }
 
 /// The outcome of resolving + sending one instruction to one pane. Shared between a direct
@@ -56,6 +55,10 @@ pub struct PaneDispatchResult {
 #[serde(rename_all = "camelCase")]
 pub struct SendCommandResult {
     pub summary: String,
+    /// "success" | "issue" | "decision_needed" — see `Classification`.
+    pub category: String,
+    /// Empty string when the outcome's category is toggled off in Settings — classification and
+    /// summary still happen either way (for the transcript text), only the TTS call is skipped.
     pub audio_base64: String,
     pub dispatch: PaneDispatchResult,
 }
@@ -64,6 +67,9 @@ pub struct SendCommandResult {
 #[serde(rename_all = "camelCase")]
 pub struct SupervisorResult {
     pub summary: String,
+    /// "success" | "issue" | "decision_needed" for a dispatch; absent (empty string) for a
+    /// direct fleet-status "answer", which isn't gated by the three speak-toggles.
+    pub category: String,
     pub audio_base64: String,
     /// Empty when the supervisor answered directly from fleet status without touching any pane.
     pub dispatches: Vec<PaneDispatchResult>,
@@ -123,12 +129,24 @@ pub async fn send_command(
 
     let dispatch =
         dispatch_to_pane(&collie, &openrouter, &settings.reply_model, &pane_id, &text).await?;
-    let summary =
-        summarize_output(&openrouter, &settings.summarize_model, &dispatch.raw_output).await?;
-    let audio_base64 = synthesize(&openrouter, &settings, &summary).await?;
+
+    let context = format!(
+        "Operator instruction (context only — do not repeat this back): {}\n\nAgent output:\n{}",
+        dispatch.sent_content, dispatch.raw_output
+    );
+    let system = classification_system_prompt(settings.tts_max_words, false);
+    let classification =
+        classify_and_summarize(&openrouter, &settings.summarize_model, &system, &context).await?;
+
+    let audio_base64 = if should_speak(&settings, &classification.category) {
+        synthesize(&openrouter, &settings, &classification.summary).await?
+    } else {
+        String::new()
+    };
 
     Ok(SendCommandResult {
-        summary,
+        summary: classification.summary,
+        category: classification.category,
         audio_base64,
         dispatch,
     })
@@ -155,12 +173,15 @@ pub async fn send_supervisor_command(
     let decision = supervisor_decide(&openrouter, &settings.reply_model, &listing, &text).await?;
 
     if decision.action == "answer" {
+        // A direct answer to a direct question (e.g. "what's blocked") — not a dispatch
+        // outcome, so it isn't one of the three categories and isn't gated by their toggles.
         let answer = decision
             .answer
             .unwrap_or_else(|| "no status available".into());
         let audio_base64 = synthesize(&openrouter, &settings, &answer).await?;
         return Ok(SupervisorResult {
             summary: answer,
+            category: String::new(),
             audio_base64,
             dispatches: vec![],
         });
@@ -188,11 +209,20 @@ pub async fn send_supervisor_command(
         });
     }
 
-    let summary = summarize_dispatches(&openrouter, &settings.summarize_model, &dispatches).await?;
-    let audio_base64 = synthesize(&openrouter, &settings, &summary).await?;
+    let context = dispatches_context(&dispatches);
+    let system = classification_system_prompt(settings.tts_max_words, true);
+    let classification =
+        classify_and_summarize(&openrouter, &settings.summarize_model, &system, &context).await?;
+
+    let audio_base64 = if should_speak(&settings, &classification.category) {
+        synthesize(&openrouter, &settings, &classification.summary).await?
+    } else {
+        String::new()
+    };
 
     Ok(SupervisorResult {
-        summary,
+        summary: classification.summary,
+        category: classification.category,
         audio_base64,
         dispatches,
     })
@@ -217,6 +247,42 @@ pub async fn read_pane(
         .read_pane(&pane_id, lines)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// If no OpenRouter key is cached yet, fetches the OpenRouter *management* key from kv_manager
+/// and uses it to mint a fresh, spend-capped OpenRouter key for this install, caching the
+/// result in Settings so every call after this one is the free/instant already-cached path.
+#[tauri::command]
+pub async fn ensure_openrouter_key(app: AppHandle) -> Result<Settings, String> {
+    let mut settings = settings::load(&app)?;
+    if !settings.openrouter_api_key.trim().is_empty() {
+        return Ok(settings);
+    }
+    if settings.kv_manager_base_url.trim().is_empty()
+        || settings.kv_manager_api_key.trim().is_empty()
+    {
+        return Err(
+            "no OpenRouter key cached and kv_manager isn't configured — set one in Settings".into(),
+        );
+    }
+
+    let kv = KvManagerClient::new(
+        settings.kv_manager_base_url.clone(),
+        settings.kv_manager_api_key.clone(),
+    );
+    let management_key = kv
+        .get_entry(&settings.kv_manager_entry_key)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let http = reqwest::Client::new();
+    let new_key = openrouter::provision_scoped_key(&http, &management_key, "collie-voice-commands")
+        .await
+        .map_err(|e| e.to_string())?;
+
+    settings.openrouter_api_key = new_key;
+    settings::save(&app, &settings)?;
+    Ok(settings)
 }
 
 /// Synthesizes speech for arbitrary text (e.g. the "pane needs you" attention alert) without
@@ -295,34 +361,72 @@ async fn dispatch_to_pane(
     })
 }
 
-async fn summarize_output(
-    openrouter: &OpenRouterClient,
-    model: &str,
-    raw_output: &str,
-) -> Result<String, String> {
-    openrouter
-        .chat_text(model, SUMMARY_SYSTEM_PROMPT, raw_output)
-        .await
-        .map_err(|e| e.to_string())
+/// Gates whether a classified outcome actually gets synthesized to audio — every turn is still
+/// classified and summarized regardless (the transcript always shows the text).
+fn should_speak(settings: &Settings, category: &str) -> bool {
+    match category {
+        "issue" => settings.speak_issue_reports,
+        "success" => settings.speak_success_reports,
+        "decision_needed" => settings.speak_decision_needed,
+        // Unrecognized category (a model that ignores the enum) — err toward speaking it
+        // rather than silently dropping something the operator might need to hear.
+        _ => true,
+    }
 }
 
-async fn summarize_dispatches(
+fn classification_system_prompt(max_words: u32, multi_pane: bool) -> String {
+    let scope_note = if multi_pane {
+        " This may cover more than one pane — name each pane you mention in the summary."
+    } else {
+        ""
+    };
+    format!(
+        "You produce a SPOKEN status update for an operator who just told a coding agent to do \
+         something and stepped away — this is read aloud by text-to-speech, not displayed as \
+         text to read. Never restate the operator's own instruction back to them; they already \
+         know what they asked for — reading it back to them is pointless. Classify the outcome \
+         as exactly one of: \"success\" (the task completed, nothing needed from the operator), \
+         \"issue\" (something failed or went wrong), or \"decision_needed\" (the agent is \
+         blocked, asking a question, or needs the operator to choose or confirm something). \
+         Write `summary` as the spoken line itself — strong summarization, ONLY the absolute \
+         necessities: what was accomplished or what went wrong, and if a decision is needed, \
+         exactly what the operator must decide. No filler, no pleasantries, no restating the \
+         request.{scope_note} Hard limit: {max_words} words or fewer."
+    )
+}
+
+async fn classify_and_summarize(
     openrouter: &OpenRouterClient,
     model: &str,
-    dispatches: &[PaneDispatchResult],
-) -> Result<String, String> {
+    system: &str,
+    context: &str,
+) -> Result<Classification, String> {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "category": { "type": "string", "enum": ["success", "issue", "decision_needed"] },
+            "summary": { "type": "string" }
+        },
+        "required": ["category", "summary"],
+        "additionalProperties": false
+    });
+    let value = openrouter
+        .chat_json(model, system, context, "collie_classification", schema)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::from_value(value).map_err(|e| format!("classification response: {e}"))
+}
+
+fn dispatches_context(dispatches: &[PaneDispatchResult]) -> String {
     let mut combined = String::new();
     for d in dispatches {
         let name = d.pane_name.as_deref().unwrap_or(&d.pane_id);
         combined.push_str(&format!(
-            "### {name}\ninstruction: {}\noutput:\n{}\n\n",
+            "### {name}\ninstruction (context only — do not repeat this back): {}\noutput:\n{}\n\n",
             d.sent_content, d.raw_output
         ));
     }
-    openrouter
-        .chat_text(model, SUPERVISOR_SUMMARY_SYSTEM_PROMPT, &combined)
-        .await
-        .map_err(|e| e.to_string())
+    combined
 }
 
 async fn synthesize(
