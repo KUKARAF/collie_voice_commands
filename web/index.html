@@ -34,10 +34,13 @@
     </header>
 
     <div class="now-playing" id="now-playing" style="display: none">
-      <span class="now-playing__label">▶ NOW PLAYING</span>
-      <div class="now-playing__waveform waveform" id="now-playing-waveform"></div>
-      <span class="now-playing__time" id="now-playing-time">0:00</span>
-      <button class="now-playing__toggle" id="now-playing-toggle">❚❚</button>
+      <div class="now-playing__row">
+        <span class="now-playing__label">▶ NOW PLAYING</span>
+        <div class="now-playing__waveform waveform" id="now-playing-waveform"></div>
+        <span class="now-playing__time" id="now-playing-time">0:00</span>
+        <button class="now-playing__toggle" id="now-playing-toggle">❚❚</button>
+      </div>
+      <div class="now-playing__text" id="now-playing-text"></div>
     </div>
 
     <main class="screen" id="screen"></main>
@@ -66,11 +69,8 @@
           <span class="card__time" id="blocked-since"></span>
         </div>
         <div class="blocked-overlay__prompt" id="blocked-prompt"></div>
-        <div class="blocked-overlay__actions">
-          <button class="btn btn--lg blocked-overlay__voice-reply" id="blocked-voice-reply">▮ VOICE REPLY</button>
-          <button class="btn btn--outline btn--lg" id="blocked-yes">Y</button>
-          <button class="btn btn--danger btn--lg" id="blocked-no">N</button>
-        </div>
+        <div class="blocked-overlay__options" id="blocked-options"></div>
+        <button class="btn btn--lg blocked-overlay__voice-reply" id="blocked-voice-reply">▮ VOICE REPLY</button>
         <div class="blocked-overlay__footer">
           <button id="blocked-snooze">snooze 5m</button> ·
           <button id="blocked-dismiss">dismiss</button>

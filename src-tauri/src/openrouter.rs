@@ -87,6 +87,13 @@ impl OpenRouterClient {
             .map_err(|e| OpenRouterError::Shape(format!("content wasn't valid JSON: {e}")))
     }
 
+    /// Passthrough for callers that need to shape the request body themselves — e.g. setting
+    /// `tools`/`tool_choice` for multi-turn tool-calling, which doesn't reliably combine with
+    /// `chat_json`'s strict `response_format` schema mode in the same call.
+    pub async fn chat_raw(&self, body: Value) -> Result<Value> {
+        self.chat(body).await
+    }
+
     /// Raw audio bytes from OpenRouter's dedicated TTS endpoint — this is NOT the chat
     /// completions endpoint, and the response body is audio, not JSON.
     pub async fn tts(

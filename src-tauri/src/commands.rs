@@ -4,11 +4,13 @@ use tauri::AppHandle;
 use tokio::time::{sleep, Duration};
 
 use crate::collie::{
-    find_focused_pane, AgentStatus, CollieClient, PaneReadResponse, SnapshotResponse,
+    find_focused_pane, find_pane_by_id, pane_display_name, AgentStatus, CollieClient,
+    PaneReadResponse, SnapshotResponse,
 };
 use crate::kvmanager::KvManagerClient;
 use crate::openrouter::{self, OpenRouterClient};
 use crate::settings::{self, Settings};
+use crate::supervisor_tools;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(1500);
 const POLL_TIMEOUT_ITERATIONS: u32 = 60; // ~90s — no stronger "done" signal exists than status.
@@ -92,6 +94,29 @@ struct SupervisorTarget {
     instruction: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedOption {
+    /// Button text.
+    pub label: String,
+    /// Free-form text — deliberately *not* pre-resolved to keys. Sent through the same
+    /// `send_command` → `resolve_reply` pipeline as any typed/dictated instruction when tapped,
+    /// reusing the keys-vs-text resolution logic that already works there.
+    pub instruction: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedPromptDescription {
+    /// "yes_no" | "menu" | "freeform"
+    pub kind: String,
+    /// Human-readable rendering of what the pane is actually asking — also what gets spoken,
+    /// so what's shown and what's said are the same text.
+    pub question: String,
+    /// Empty for "freeform" — nothing discrete to offer as a quick-reply button.
+    pub options: Vec<BlockedOption>,
+}
+
 #[tauri::command]
 pub fn get_settings(app: AppHandle) -> Result<Settings, String> {
     settings::load(&app)
@@ -170,7 +195,25 @@ pub async fn send_supervisor_command(
     let snapshot = collie.snapshot().await.map_err(|e| e.to_string())?;
     let listing = fleet_listing(&snapshot);
 
-    let decision = supervisor_decide(&openrouter, &settings.reply_model, &listing, &text).await?;
+    let gathered = supervisor_tools::gather_context(
+        &collie,
+        &openrouter,
+        &settings.reply_model,
+        &settings.summarize_model,
+        &snapshot,
+        &listing,
+        &text,
+    )
+    .await?;
+
+    let decision = supervisor_decide(
+        &openrouter,
+        &settings.reply_model,
+        &listing,
+        &gathered,
+        &text,
+    )
+    .await?;
 
     if decision.action == "answer" {
         // A direct answer to a direct question (e.g. "what's blocked") — not a dispatch
@@ -247,6 +290,71 @@ pub async fn read_pane(
         .read_pane(&pane_id, lines)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Classifies what a blocked pane is actually asking — a yes/no question, a numbered/lettered
+/// menu, or an open-ended question with nothing discrete to offer — so the blocked-attention
+/// overlay can render the right quick-reply buttons instead of always assuming yes/no.
+#[tauri::command]
+pub async fn describe_blocked_prompt(
+    app: AppHandle,
+    pane_id: String,
+) -> Result<BlockedPromptDescription, String> {
+    let settings = settings::load(&app)?;
+    if settings.openrouter_api_key.trim().is_empty() {
+        return Err("set an OpenRouter API key in Settings first".into());
+    }
+    let collie = CollieClient::new(settings.collie_base_url.clone());
+    let openrouter = OpenRouterClient::new(settings.openrouter_api_key.clone());
+
+    let tail = collie
+        .read_pane(&pane_id, Some(60))
+        .await
+        .map_err(|e| e.to_string())?
+        .text;
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "kind": { "type": "string", "enum": ["yes_no", "menu", "freeform"] },
+            "question": { "type": "string" },
+            "options": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": { "type": "string" },
+                        "instruction": { "type": "string" }
+                    },
+                    "required": ["label", "instruction"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["kind", "question", "options"],
+        "additionalProperties": false
+    });
+    let system = "A terminal pane running an AI coding agent is waiting on the operator. Look \
+        at its recent output and classify what it's asking. \"yes_no\": a plain yes/no \
+        confirmation — `options` must be exactly [{label:\"Yes\",instruction:\"yes\"}, \
+        {label:\"No\",instruction:\"no\"}]. \"menu\": a numbered/lettered list of discrete \
+        choices — one option per choice, `instruction` phrased as free text naming that choice \
+        (e.g. \"choose src/users/users.service.ts\"), NOT raw keys — something already sent \
+        through voice/typed resolution. \"freeform\": an open-ended question with no discrete \
+        choices to offer — leave `options` empty. `question` is a short, clear, human-readable \
+        rendering of what's actually being asked, suitable to both show as text and read aloud \
+        verbatim — not a restatement of raw terminal output.";
+    let value = openrouter
+        .chat_json(
+            &settings.reply_model,
+            system,
+            &tail,
+            "collie_blocked_prompt",
+            schema,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::from_value(value).map_err(|e| format!("blocked-prompt classification: {e}"))
 }
 
 /// If no OpenRouter key is cached yet, fetches the OpenRouter *management* key from kv_manager
@@ -485,19 +593,8 @@ fn fleet_listing(snapshot: &SnapshotResponse) -> String {
 }
 
 fn find_pane_name(snapshot: &SnapshotResponse, pane_id: &str) -> String {
-    snapshot
-        .agents
-        .iter()
-        .chain(snapshot.shell_panes.iter())
-        .find(|p| p.pane_id == pane_id)
-        .map(|p| {
-            let label = p
-                .pane_label
-                .clone()
-                .or_else(|| p.session_name.clone())
-                .unwrap_or_else(|| p.agent.clone());
-            format!("{} · {label}", p.agent)
-        })
+    find_pane_by_id(snapshot, pane_id)
+        .map(pane_display_name)
         .unwrap_or_else(|| pane_id.to_string())
 }
 
@@ -543,6 +640,7 @@ async fn supervisor_decide(
     openrouter: &OpenRouterClient,
     model: &str,
     fleet_listing: &str,
+    gathered_context: &str,
     user_text: &str,
 ) -> Result<SupervisorDecision, String> {
     let schema = serde_json::json!({
@@ -568,15 +666,21 @@ async fn supervisor_decide(
     });
     let system = "You are a supervisor across a fleet of terminal panes, each possibly running \
         an AI coding agent. You're given a listing of every pane (id, agent, label, workspace, \
-        status, cwd) and an operator instruction. If the instruction can be answered directly \
-        from the fleet status shown (e.g. \"what's blocked\", \"how many are working\", \
-        \"what's running in the billing workspace\"), respond with action \"answer\" and put \
-        the answer in `answer`, leaving `targets` null — do not contact any pane for a pure \
-        status question. If the instruction should be carried out on one or more specific \
-        panes (referred to by name, label, workspace, or clearly implied), respond with action \
-        \"dispatch\" and list each target pane's id plus an instruction phrased for that pane, \
-        leaving `answer` null. Only target panes that actually exist in the listing.";
-    let user = format!("Fleet:\n{fleet_listing}\n\nOperator said: {user_text}");
+        status, cwd), context already gathered by an earlier lookup step (search/summarize/\
+        resolve-by-context tool calls — may be empty if no lookup was needed), and an operator \
+        instruction. If the gathered context already answers the operator's question, respond \
+        with action \"answer\" using it — don't dispatch to a pane to re-fetch something \
+        already found. If the instruction can otherwise be answered directly from the fleet \
+        status shown (e.g. \"what's blocked\", \"how many are working\"), also use \"answer\". \
+        Only use \"answer\" when you're not contacting any pane. If the instruction should be \
+        carried out on one or more specific panes (referred to by name, label, workspace, or \
+        clearly implied — use the gathered context to resolve fuzzy references to a real pane \
+        id), respond with action \"dispatch\" and list each target pane's id plus an \
+        instruction phrased for that pane, leaving `answer` null. Only target panes that \
+        actually exist in the listing.";
+    let user = format!(
+        "Fleet:\n{fleet_listing}\n\nGathered context (from tool lookups, if any):\n{gathered_context}\n\nOperator said: {user_text}"
+    );
     let value = openrouter
         .chat_json(model, system, &user, "collie_supervisor", schema)
         .await

@@ -56,15 +56,14 @@ impl Default for Settings {
             collie_base_url: "https://thinkpad.sparidae-chinstrap.ts.net".into(),
             openrouter_api_key: String::new(),
             // Starting points only — verify against OpenRouter's live catalog/pricing and
-            // change here in Settings whenever.
+            // change here in Settings whenever. MiniMax across the board by preference: M3 for
+            // both the resolver/reasoning calls and summarization, speech-2.8-turbo for TTS.
+            // "English_expressive_narrator" is one of MiniMax's own documented English preset
+            // voice ids.
             reply_model: "minimax/minimax-m3".into(),
-            summarize_model: "openai/gpt-4o-mini".into(),
-            // "openai/gpt-4o-mini-tts" doesn't exist on OpenRouter's TTS endpoint (confirmed by
-            // a live 400 from a real device) — Kokoro is lightweight, open-weight, and its
-            // slug/voice naming is stable upstream. "af_heart" is Kokoro's own documented
-            // default voice.
-            tts_model: "hexgrad/kokoro-82m".into(),
-            tts_voice: "af_heart".into(),
+            summarize_model: "minimax/minimax-m3".into(),
+            tts_model: "minimax/speech-2.8-turbo".into(),
+            tts_voice: "English_expressive_narrator".into(),
             tts_format: "mp3".into(),
             kv_manager_base_url: String::new(),
             kv_manager_api_key: String::new(),
@@ -86,10 +85,14 @@ fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir.join("settings.json"))
 }
 
-// Model that shipped as the default before a live device confirmed OpenRouter 400s on it —
-// self-heal existing installs that already have it cached, rather than requiring a manual
-// Settings edit for a value the user never chose themselves.
-const RETIRED_TTS_MODEL: &str = "openai/gpt-4o-mini-tts";
+// Models that shipped as *the default* in an earlier version — self-heal installs that still
+// have exactly one of these cached, rather than requiring a manual Settings edit for a value
+// the user never deliberately chose. Anyone who has actually customized their model keeps it —
+// this only fires when the cached value still matches a known-past-default exactly.
+const RETIRED_TTS_MODEL: &str = "openai/gpt-4o-mini-tts"; // never existed on OpenRouter at all
+const PREVIOUS_DEFAULT_SUMMARIZE_MODEL: &str = "openai/gpt-4o-mini";
+const PREVIOUS_DEFAULT_TTS_MODEL: &str = "hexgrad/kokoro-82m";
+const PREVIOUS_DEFAULT_TTS_VOICE: &str = "af_heart";
 
 pub fn load(app: &AppHandle) -> Result<Settings, String> {
     let path = settings_path(app)?;
@@ -100,10 +103,22 @@ pub fn load(app: &AppHandle) -> Result<Settings, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Settings::default()),
         Err(e) => return Err(format!("reading settings.json: {e}")),
     };
-    if settings.tts_model == RETIRED_TTS_MODEL {
-        let healed = Settings::default();
-        settings.tts_model = healed.tts_model;
-        settings.tts_voice = healed.tts_voice;
+
+    let mut healed = false;
+    if settings.tts_model == RETIRED_TTS_MODEL
+        || (settings.tts_model == PREVIOUS_DEFAULT_TTS_MODEL
+            && settings.tts_voice == PREVIOUS_DEFAULT_TTS_VOICE)
+    {
+        let defaults = Settings::default();
+        settings.tts_model = defaults.tts_model;
+        settings.tts_voice = defaults.tts_voice;
+        healed = true;
+    }
+    if settings.summarize_model == PREVIOUS_DEFAULT_SUMMARIZE_MODEL {
+        settings.summarize_model = Settings::default().summarize_model;
+        healed = true;
+    }
+    if healed {
         save(app, &settings)?;
     }
     Ok(settings)

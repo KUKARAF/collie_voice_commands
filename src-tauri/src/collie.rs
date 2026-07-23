@@ -177,6 +177,25 @@ pub fn find_focused_pane(snapshot: &SnapshotResponse) -> Option<&AgentView> {
         .find(|a| a.focused)
 }
 
+/// Human-readable label for a pane — "claude · users-service" style — preferring a user-set
+/// label, then Claude's own in-pane session name, falling back to just the agent name.
+pub fn pane_display_name(p: &AgentView) -> String {
+    let label = p
+        .pane_label
+        .clone()
+        .or_else(|| p.session_name.clone())
+        .unwrap_or_else(|| p.agent.clone());
+    format!("{} · {label}", p.agent)
+}
+
+pub fn find_pane_by_id<'a>(snapshot: &'a SnapshotResponse, pane_id: &str) -> Option<&'a AgentView> {
+    snapshot
+        .agents
+        .iter()
+        .chain(snapshot.shell_panes.iter())
+        .find(|p| p.pane_id == pane_id)
+}
+
 pub struct CollieClient {
     http: reqwest::Client,
     base_url: String,

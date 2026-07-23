@@ -123,7 +123,7 @@ function renderWaveform(container, count, playedFraction) {
 
 // ---------- audio playback ----------
 
-function playAudio(audioBase64, format) {
+function playAudio(audioBase64, format, text) {
   stopAudio();
   const audio = new Audio(`data:audio/${format || "mp3"};base64,${audioBase64}`);
   state.audio = audio;
@@ -131,7 +131,8 @@ function playAudio(audioBase64, format) {
   const wf = document.getElementById("now-playing-waveform");
   const timeEl = document.getElementById("now-playing-time");
   const toggle = document.getElementById("now-playing-toggle");
-  bar.style.display = "flex";
+  document.getElementById("now-playing-text").textContent = text || "";
+  bar.style.display = "block";
   renderWaveform(wf, 24, 0);
   toggle.textContent = "❚❚";
   audio.addEventListener("timeupdate", () => {
@@ -337,7 +338,7 @@ function renderConversation() {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       const turn = turns.find((t) => t.id === btn.dataset.replay);
-      if (turn && turn.audioBase64) playAudio(turn.audioBase64, turn.audioFormat);
+      if (turn && turn.audioBase64) playAudio(turn.audioBase64, turn.audioFormat, turn.summary);
     });
   });
   screen.querySelectorAll("[data-turn]").forEach((card) => {
@@ -425,7 +426,7 @@ function renderTurnDetail(id) {
   screen.innerHTML = turnCardHtml(turn, { linkToDetail: false }) + detailHtml;
   const replay = screen.querySelector("[data-replay]");
   if (replay) {
-    replay.addEventListener("click", () => turn.audioBase64 && playAudio(turn.audioBase64, turn.audioFormat));
+    replay.addEventListener("click", () => turn.audioBase64 && playAudio(turn.audioBase64, turn.audioFormat, turn.summary));
   }
   const wf = document.getElementById(`wf-${turn.id}`);
   if (wf) renderWaveform(wf, 18, null);
@@ -684,17 +685,47 @@ function renderSettings() {
 
 // ---------- blocked overlay ----------
 
-function showBlockedOverlay(pane, promptText) {
+async function showBlockedOverlay(pane) {
   state.blockedPane = { paneId: pane.paneId, name: paneDisplayName(pane), since: Date.now() };
   document.getElementById("blocked-pane-name").textContent = state.blockedPane.name;
-  document.getElementById("blocked-prompt").textContent = stripAnsi(promptText || "").trim().split("\n").pop() || "(no prompt captured)";
   document.getElementById("blocked-since").textContent = "blocked";
   document.getElementById("blocked-overlay").classList.add("is-open");
 
-  // A blocked pane is exactly a "decision needed" event — same toggle governs both.
-  if (state.settings && state.settings.openrouterApiKey && state.settings.speakDecisionNeeded !== false) {
-    invoke("speak", { text: `${state.blockedPane.name} needs you` })
-      .then((audioBase64) => playAudio(audioBase64, state.settings.ttsFormat))
+  const promptEl = document.getElementById("blocked-prompt");
+  const optionsEl = document.getElementById("blocked-options");
+  promptEl.textContent = "…";
+  optionsEl.innerHTML = "";
+
+  let description;
+  try {
+    description = await invoke("describe_blocked_prompt", { paneId: pane.paneId });
+  } catch (err) {
+    promptEl.textContent = String(err);
+    return;
+  }
+  // The overlay might already be dismissed/pointed elsewhere by the time this resolves.
+  if (!state.blockedPane || state.blockedPane.paneId !== pane.paneId) return;
+
+  promptEl.textContent = description.question || "(no prompt captured)";
+  for (const option of description.options || []) {
+    const btn = document.createElement("button");
+    btn.className = "btn btn--outline";
+    btn.textContent = option.label;
+    btn.addEventListener("click", () => quickBlockedReply(option.instruction));
+    optionsEl.appendChild(btn);
+  }
+
+  // A blocked pane is exactly a "decision needed" event — same toggle governs both. Speak
+  // exactly what's shown as `question`, not a generic phrase — what's said and what's shown
+  // should be the same text.
+  if (
+    description.question &&
+    state.settings &&
+    state.settings.openrouterApiKey &&
+    state.settings.speakDecisionNeeded !== false
+  ) {
+    invoke("speak", { text: description.question })
+      .then((audioBase64) => playAudio(audioBase64, state.settings.ttsFormat, description.question))
       .catch(() => {});
   }
 }
@@ -724,8 +755,6 @@ function wireBlockedOverlay() {
     setHash("conversation");
     document.getElementById("command-input").focus();
   });
-  document.getElementById("blocked-yes").addEventListener("click", () => quickBlockedReply("yes"));
-  document.getElementById("blocked-no").addEventListener("click", () => quickBlockedReply("no"));
 }
 
 function quickBlockedReply(text) {
@@ -794,7 +823,7 @@ async function sendCommand(text, paneIdOverride) {
     }
     // The backend already decided whether this category should be spoken — an empty string
     // means it was deliberately skipped (toggled off in Settings), not a failure.
-    if (audioBase64) playAudio(audioBase64, turn.audioFormat);
+    if (audioBase64) playAudio(audioBase64, turn.audioFormat, turn.summary);
   } catch (err) {
     Object.assign(turn, { status: "error", error: String(err) });
   }
@@ -814,12 +843,7 @@ async function pollSnapshot() {
     for (const pane of allPanes(snapshot)) {
       const prev = state.prevStatus[pane.paneId];
       if (pane.status === "blocked" && prev !== "blocked" && !state.dismissedBlocked.has(pane.paneId)) {
-        try {
-          const read = await invoke("read_pane", { paneId: pane.paneId, lines: 60 });
-          showBlockedOverlay(pane, read.text);
-        } catch {
-          showBlockedOverlay(pane, "");
-        }
+        showBlockedOverlay(pane);
       }
       if (pane.status !== "blocked") state.dismissedBlocked.delete(pane.paneId);
       state.prevStatus[pane.paneId] = pane.status;

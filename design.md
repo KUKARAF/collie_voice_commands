@@ -102,3 +102,19 @@ behavior — that a frontend engineer could implement it directly in HTML/CSS/JS
 2. Bring the result back here — either replace `web/index.html`/`web/app.js`
    directly, or paste the design output back into this file under a new
    "Design output" section before implementing.
+
+## Known issues / TODO
+
+- **Blocked-overlay's Y/N buttons assume a binary decision, but real agent
+  prompts are often multi-option** (a numbered menu — "1) do X 2) do Y
+  3) cancel" — not a yes/no). Right now `web/app.js`'s blocked overlay
+  (`#blocked-yes`/`#blocked-no`) always offers exactly two fixed quick-reply
+  buttons regardless of what the pane is actually asking. The agentic
+  reply-resolution layer (`commands.rs::resolve_reply`) already knows how to
+  turn free-form text into the right keystrokes for a numbered menu when the
+  *user* types something — the overlay's fixed Y/N shortcuts just don't use
+  that path, they hardcode "yes"/"no" as the quick-reply text. Needs a look
+  at: detecting from the pane's prompt text whether it's actually a binary
+  question vs. a numbered/lettered menu, and rendering dynamic quick-reply
+  buttons (one per option) instead of always showing Y/N. Reported after
+  seeing this happen live with a Claude Code menu prompt.

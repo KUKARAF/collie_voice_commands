@@ -3,6 +3,7 @@ mod commands;
 mod kvmanager;
 mod openrouter;
 mod settings;
+mod supervisor_tools;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -26,6 +27,7 @@ pub fn run() {
             commands::read_pane,
             commands::speak,
             commands::ensure_openrouter_key,
+            commands::describe_blocked_prompt,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
