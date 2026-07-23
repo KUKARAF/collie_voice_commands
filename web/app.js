@@ -17,7 +17,6 @@ const state = {
   transcripts: loadTranscripts(), // { [paneId | "supervisor"]: Turn[] }
   blockedPane: null, // { paneId, name, prompt } currently shown in the overlay
   dismissedBlocked: new Set(), // paneIds snoozed/dismissed until they clear "blocked"
-  audio: null,
 };
 
 // ---------- storage ----------
@@ -123,51 +122,98 @@ function renderWaveform(container, count, playedFraction) {
 
 // ---------- audio playback ----------
 
-function playAudio(audioBase64, format, text) {
-  stopAudio();
-  const audio = new Audio(`data:audio/${format || "mp3"};base64,${audioBase64}`);
-  state.audio = audio;
+// "mp3" alone isn't a real MIME type (should be audio/mpeg) — Android's WebView can silently
+// refuse to decode a data: URI with an unrecognized/non-standard MIME, which was making TTS
+// audio fail 100% of the time with no visible error.
+const TTS_MIME_TYPES = {
+  mp3: "audio/mpeg",
+  mpeg: "audio/mpeg",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  opus: "audio/ogg",
+  aac: "audio/aac",
+  flac: "audio/flac",
+};
+
+function ttsMimeType(format) {
+  return TTS_MIME_TYPES[(format || "mp3").toLowerCase()] || "audio/mpeg";
+}
+
+// One persistent <audio> element, reused for every play. Creating a fresh `new Audio()` per
+// call (the previous approach) meant every playback was a brand-new, never-gestured element —
+// Chromium's autoplay allowance is tied to the page having received a user gesture at all, but
+// a never-before-played element can still be treated more strictly, and re-registering
+// listeners per call was also wasteful. One element, created once, is both more correct and
+// simpler.
+let ttsAudioEl = null;
+
+function getTtsAudioElement() {
+  if (ttsAudioEl) return ttsAudioEl;
+  ttsAudioEl = new Audio();
   const bar = document.getElementById("now-playing");
   const wf = document.getElementById("now-playing-waveform");
   const timeEl = document.getElementById("now-playing-time");
+  const toggle = document.getElementById("now-playing-toggle");
+  ttsAudioEl.addEventListener("timeupdate", () => {
+    const frac = ttsAudioEl.duration ? ttsAudioEl.currentTime / ttsAudioEl.duration : 0;
+    renderWaveform(wf, 24, frac);
+    const remaining = Math.max(0, (ttsAudioEl.duration || 0) - ttsAudioEl.currentTime);
+    const mm = Math.floor(remaining / 60);
+    const ss = Math.floor(remaining % 60).toString().padStart(2, "0");
+    timeEl.textContent = `${mm}:${ss}`;
+  });
+  ttsAudioEl.addEventListener("ended", () => {
+    bar.style.display = "none";
+  });
+  ttsAudioEl.addEventListener("error", () => {
+    console.error("tts playback error", ttsAudioEl.error);
+    toggle.textContent = "▶";
+  });
+  toggle.addEventListener("click", () => {
+    if (ttsAudioEl.paused) {
+      ttsAudioEl.play().catch((err) => console.error("tts playback failed", err));
+      toggle.textContent = "❚❚";
+    } else {
+      ttsAudioEl.pause();
+      toggle.textContent = "▶";
+    }
+  });
+  return ttsAudioEl;
+}
+
+// Call from inside a genuine click handler (e.g. TALK), before any async work — Chromium grants
+// autoplay permission for the page from a real user gesture like this, and reusing the same
+// element afterward (see above) is what makes that permission actually carry over to the
+// programmatic play() calls that happen later once a network response comes back.
+function primeAudioPlayback() {
+  const audio = getTtsAudioElement();
+  audio.play().catch(() => {});
+  audio.pause();
+}
+
+function playAudio(audioBase64, format, text) {
+  const audio = getTtsAudioElement();
+  audio.pause();
+  audio.src = `data:${ttsMimeType(format)};base64,${audioBase64}`;
+  const bar = document.getElementById("now-playing");
+  const wf = document.getElementById("now-playing-waveform");
   const toggle = document.getElementById("now-playing-toggle");
   document.getElementById("now-playing-text").textContent = text || "";
   bar.style.display = "block";
   renderWaveform(wf, 24, 0);
   toggle.textContent = "❚❚";
-  audio.addEventListener("timeupdate", () => {
-    const frac = audio.duration ? audio.currentTime / audio.duration : 0;
-    renderWaveform(wf, 24, frac);
-    const remaining = Math.max(0, (audio.duration || 0) - audio.currentTime);
-    const mm = Math.floor(remaining / 60);
-    const ss = Math.floor(remaining % 60).toString().padStart(2, "0");
-    timeEl.textContent = `${mm}:${ss}`;
-  });
-  audio.addEventListener("ended", () => {
-    bar.style.display = "none";
-    state.audio = null;
-  });
-  toggle.onclick = () => {
-    if (audio.paused) {
-      audio.play();
-      toggle.textContent = "❚❚";
-    } else {
-      audio.pause();
-      toggle.textContent = "▶";
-    }
-  };
-  audio.play().catch(() => {
-    // Autoplay can be blocked; the now-playing bar's toggle still lets the user start it.
+  audio.play().catch((err) => {
+    // Playback blocked or failed — the now-playing bar's toggle still lets the user start it
+    // manually (a direct tap is its own valid user gesture).
+    console.error("tts autoplay failed", err);
     toggle.textContent = "▶";
   });
 }
 
 function stopAudio() {
-  if (state.audio) {
-    state.audio.pause();
-    state.audio = null;
-  }
-  document.getElementById("now-playing").style.display = "none";
+  if (ttsAudioEl) ttsAudioEl.pause();
+  const bar = document.getElementById("now-playing");
+  if (bar) bar.style.display = "none";
 }
 
 // ---------- router ----------
@@ -196,6 +242,17 @@ function renderChrome(view) {
   const keyChip = document.getElementById("key-chip");
   const hasKey = !!(state.settings && state.settings.openrouterApiKey);
   keyChip.className = "chip " + (hasKey ? "chip--accent" : "chip--orange");
+
+  // Visible from every screen, not just Fleet — "what needs attention and where" shouldn't
+  // depend on which pane's conversation happens to be open.
+  const attentionChip = document.getElementById("attention-chip");
+  const blockedCount = allPanes(state.snapshot).filter((p) => p.status === "blocked").length;
+  if (blockedCount > 0) {
+    attentionChip.style.display = "inline-flex";
+    attentionChip.innerHTML = `<span class="chip__dot"></span>${blockedCount} NEED${blockedCount === 1 ? "S" : ""} ATTENTION`;
+  } else {
+    attentionChip.style.display = "none";
+  }
 
   if (view === "conversation") {
     appBar.style.display = "";
@@ -707,13 +764,17 @@ async function showBlockedOverlay(pane) {
   if (!state.blockedPane || state.blockedPane.paneId !== pane.paneId) return;
 
   promptEl.textContent = description.question || "(no prompt captured)";
-  for (const option of description.options || []) {
+  (description.options || []).forEach((option, i) => {
     const btn = document.createElement("button");
     btn.className = "btn btn--outline";
-    btn.textContent = option.label;
-    btn.addEventListener("click", () => quickBlockedReply(option.instruction));
+    // The model occasionally leaves `label` blank while still filling `instruction` in
+    // correctly (the button still works, it's just visually empty) — fall back rather than
+    // ever show a blank button.
+    const label = (option.label && option.label.trim()) || (option.instruction && option.instruction.trim()) || `Option ${i + 1}`;
+    btn.textContent = label;
+    btn.addEventListener("click", () => quickBlockedReply(option.instruction || label));
     optionsEl.appendChild(btn);
-  }
+  });
 
   // A blocked pane is exactly a "decision needed" event — same toggle governs both. Speak
   // exactly what's shown as `question`, not a generic phrase — what's said and what's shown
@@ -760,6 +821,7 @@ function wireBlockedOverlay() {
 function quickBlockedReply(text) {
   if (!state.blockedPane) return;
   const paneId = state.blockedPane.paneId;
+  primeAudioPlayback();
   hideBlockedOverlay();
   sendCommand(text, paneId);
 }
@@ -879,6 +941,7 @@ function renderApp() {
 
 function wireGlobalControls() {
   document.getElementById("settings-btn").addEventListener("click", () => setHash("settings"));
+  document.getElementById("attention-chip").addEventListener("click", () => setHash("fleet"));
   document.getElementById("back-btn").addEventListener("click", () => {
     if (parseHash().view === "turn") setHash("conversation");
     else setHash("conversation");
@@ -890,6 +953,9 @@ function wireGlobalControls() {
     const text = input.value.trim();
     if (!text) return;
     input.value = "";
+    // Must happen synchronously inside this gesture handler, before any async work — see
+    // primeAudioPlayback's comment.
+    primeAudioPlayback();
     sendCommand(text);
   };
   document.getElementById("talk-btn").addEventListener("click", submit);
@@ -941,6 +1007,10 @@ async function init() {
   wireGlobalControls();
   wireBlockedOverlay();
   wireSwipeToSettings();
+  // Broad safety net: primes audio on literally the first tap anywhere, so a blocked-pane alert
+  // that fires from background polling (no gesture of its own) still has a chance to play if
+  // the operator has touched the app at all already this session.
+  document.addEventListener("pointerdown", primeAudioPlayback, { once: true });
   try {
     state.settings = await invoke("get_settings");
   } catch {
