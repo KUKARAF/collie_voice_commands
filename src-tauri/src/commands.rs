@@ -343,7 +343,14 @@ pub async fn describe_blocked_prompt(
         through voice/typed resolution. \"freeform\": an open-ended question with no discrete \
         choices to offer — leave `options` empty. `question` is a short, clear, human-readable \
         rendering of what's actually being asked, suitable to both show as text and read aloud \
-        verbatim — not a restatement of raw terminal output.";
+        verbatim — not a restatement of raw terminal output. CRITICAL: `question` must name the \
+        actual specific thing being decided, not the tool's generic chrome text. If the pane \
+        shows something like \"This command requires approval\" or \"Do you want to proceed?\" \
+        around an actual command/action (e.g. a shell command, a file edit, a URL), the \
+        operator cannot act on the generic sentence alone — `question` must include that \
+        specific command/action verbatim, e.g. \"Approve running: sleep 5 && gh run list \
+        --branch main --limit 3?\" or \"Approve editing src/main.rs?\", never just \"approve \
+        this command?\" with no indication of what the command actually is.";
     let value = openrouter
         .chat_json(
             &settings.reply_model,
