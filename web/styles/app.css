@@ -40,7 +40,10 @@ body {
 
 .app-bar {
   flex: 0 0 auto;
-  padding: var(--space-6) var(--space-6) var(--space-3);
+  padding-top: calc(var(--space-6) + env(safe-area-inset-top, 0px));
+  padding-right: var(--space-6);
+  padding-bottom: var(--space-3);
+  padding-left: var(--space-6);
   border-bottom: var(--border-width) solid var(--border-default);
 }
 
@@ -112,7 +115,10 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: var(--space-3) var(--space-6);
+  padding-top: calc(var(--space-3) + env(safe-area-inset-top, 0px));
+  padding-right: var(--space-6);
+  padding-bottom: var(--space-3);
+  padding-left: var(--space-6);
   border-bottom: var(--border-width) solid var(--border-default);
 }
 
@@ -548,7 +554,10 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: var(--space-5) var(--space-6) var(--space-6);
+  padding-top: var(--space-5);
+  padding-right: var(--space-6);
+  padding-bottom: calc(var(--space-6) + env(safe-area-inset-bottom, 0px));
+  padding-left: var(--space-6);
 }
 
 .input-dock__field {
