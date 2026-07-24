@@ -139,6 +139,35 @@ function ttsMimeType(format) {
   return TTS_MIME_TYPES[(format || "mp3").toLowerCase()] || "audio/mpeg";
 }
 
+// Android's system WebView has long-standing gaps vs. desktop Chrome around `data:` URIs on
+// <audio>/<video> elements — some OEM/Android-version builds silently refuse to load them even
+// with a correct MIME type. A Blob object URL is the standard, well-supported workaround.
+function base64ToBlob(base64, mimeType) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mimeType });
+}
+
+const MEDIA_ERROR_LABELS = {
+  1: "aborted",
+  2: "network error",
+  3: "decode error",
+  4: "format not supported",
+};
+
+function showPlaybackError(message) {
+  const el = document.getElementById("now-playing-error");
+  if (!el) return;
+  if (!message) {
+    el.style.display = "none";
+    el.textContent = "";
+    return;
+  }
+  el.textContent = message;
+  el.style.display = "block";
+}
+
 // One persistent <audio> element, reused for every play. Creating a fresh `new Audio()` per
 // call (the previous approach) meant every playback was a brand-new, never-gestured element —
 // Chromium's autoplay allowance is tied to the page having received a user gesture at all, but
@@ -166,12 +195,20 @@ function getTtsAudioElement() {
     bar.style.display = "none";
   });
   ttsAudioEl.addEventListener("error", () => {
+    const code = ttsAudioEl.error ? ttsAudioEl.error.code : null;
     console.error("tts playback error", ttsAudioEl.error);
+    showPlaybackError(`playback failed: ${MEDIA_ERROR_LABELS[code] || "unknown error"}`);
     toggle.textContent = "▶";
   });
   toggle.addEventListener("click", () => {
     if (ttsAudioEl.paused) {
-      ttsAudioEl.play().catch((err) => console.error("tts playback failed", err));
+      ttsAudioEl
+        .play()
+        .then(() => showPlaybackError(null))
+        .catch((err) => {
+          console.error("tts playback failed", err);
+          showPlaybackError(`play blocked: ${err.message || err}`);
+        });
       toggle.textContent = "❚❚";
     } else {
       ttsAudioEl.pause();
@@ -191,14 +228,20 @@ function primeAudioPlayback() {
   audio.pause();
 }
 
+let ttsObjectUrl = null;
+
 function playAudio(audioBase64, format, text) {
   const audio = getTtsAudioElement();
   audio.pause();
-  audio.src = `data:${ttsMimeType(format)};base64,${audioBase64}`;
+  if (ttsObjectUrl) URL.revokeObjectURL(ttsObjectUrl);
+  const blob = base64ToBlob(audioBase64, ttsMimeType(format));
+  ttsObjectUrl = URL.createObjectURL(blob);
+  audio.src = ttsObjectUrl;
   const bar = document.getElementById("now-playing");
   const wf = document.getElementById("now-playing-waveform");
   const toggle = document.getElementById("now-playing-toggle");
   document.getElementById("now-playing-text").textContent = text || "";
+  showPlaybackError(null);
   bar.style.display = "block";
   renderWaveform(wf, 24, 0);
   toggle.textContent = "❚❚";
@@ -206,6 +249,7 @@ function playAudio(audioBase64, format, text) {
     // Playback blocked or failed — the now-playing bar's toggle still lets the user start it
     // manually (a direct tap is its own valid user gesture).
     console.error("tts autoplay failed", err);
+    showPlaybackError(`autoplay blocked: ${err.message || err} — tap ▶ to play`);
     toggle.textContent = "▶";
   });
 }
