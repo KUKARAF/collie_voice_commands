@@ -196,6 +196,63 @@ pub fn find_pane_by_id<'a>(snapshot: &'a SnapshotResponse, pane_id: &str) -> Opt
         .find(|p| p.pane_id == pane_id)
 }
 
+// ---- supervisor/command wire types — mirror collie-server's src/supervisor.rs +
+// src/api.rs response shapes verbatim (camelCase over the wire). collie-server now owns all
+// LLM orchestration (reply resolution, fleet routing, classification, TTS); this app only
+// deserializes its results. ----
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaneDispatchResult {
+    pub pane_id: String,
+    #[serde(default)]
+    pub pane_name: Option<String>,
+    pub sent_mode: String,
+    pub sent_content: String,
+    pub pre_send_context: String,
+    pub raw_output: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendCommandResult {
+    pub summary: String,
+    pub category: String,
+    pub audio_base64: String,
+    pub dispatch: PaneDispatchResult,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupervisorResult {
+    pub summary: String,
+    pub category: String,
+    pub audio_base64: String,
+    pub dispatches: Vec<PaneDispatchResult>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedOption {
+    pub label: String,
+    pub instruction: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedPromptDescription {
+    pub kind: String,
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<BlockedOption>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpeakResponse {
+    audio_base64: String,
+}
+
 pub struct CollieClient {
     http: reqwest::Client,
     base_url: String,
@@ -275,6 +332,77 @@ impl CollieClient {
             .await?;
         let resp = Self::ensure_success(resp).await?;
         Ok(resp.json::<ActionResponse>().await?)
+    }
+
+    /// Resolves + sends an instruction to one pane (or the currently focused pane, when
+    /// `pane_id` is `None`) and returns the classified/summarized/spoken outcome — all of that
+    /// work now happens server-side. Note: collie-server's `CommandBody` has no
+    /// `rename_all = "camelCase"` attribute, so the JSON key really is `pane_id`, not `paneId`
+    /// — verified against `collie-server/src/api.rs`.
+    pub async fn send_command(
+        &self,
+        text: &str,
+        pane_id: Option<&str>,
+    ) -> Result<SendCommandResult> {
+        let url = format!("{}/api/command", self.base_url);
+        let resp = self
+            .http
+            .post(url)
+            .header("Origin", self.origin())
+            .json(&serde_json::json!({ "text": text, "pane_id": pane_id }))
+            .send()
+            .await?;
+        let resp = Self::ensure_success(resp).await?;
+        Ok(resp.json::<SendCommandResult>().await?)
+    }
+
+    /// Fleet-wide command: collie-server decides which pane(s) to target (or answers directly
+    /// from fleet status) and returns the classified/summarized/spoken outcome.
+    pub async fn send_supervisor_command(&self, text: &str) -> Result<SupervisorResult> {
+        let url = format!("{}/api/supervisor/command", self.base_url);
+        let resp = self
+            .http
+            .post(url)
+            .header("Origin", self.origin())
+            .json(&serde_json::json!({ "text": text }))
+            .send()
+            .await?;
+        let resp = Self::ensure_success(resp).await?;
+        Ok(resp.json::<SupervisorResult>().await?)
+    }
+
+    /// Classifies what a blocked pane is asking (yes/no, menu, or freeform) for the
+    /// blocked-attention overlay's quick-reply buttons.
+    pub async fn describe_blocked_prompt(&self, pane_id: &str) -> Result<BlockedPromptDescription> {
+        let url = format!(
+            "{}/api/pane/{}/blocked",
+            self.base_url,
+            percent_encode(pane_id)
+        );
+        let resp = self
+            .http
+            .post(url)
+            .header("Origin", self.origin())
+            .send()
+            .await?;
+        let resp = Self::ensure_success(resp).await?;
+        Ok(resp.json::<BlockedPromptDescription>().await?)
+    }
+
+    /// Synthesizes speech for arbitrary text via collie-server's own OpenRouter TTS
+    /// configuration — returns base64-encoded audio bytes.
+    pub async fn speak(&self, text: &str) -> Result<String> {
+        let url = format!("{}/api/speak", self.base_url);
+        let resp = self
+            .http
+            .post(url)
+            .header("Origin", self.origin())
+            .json(&serde_json::json!({ "text": text }))
+            .send()
+            .await?;
+        let resp = Self::ensure_success(resp).await?;
+        let parsed: SpeakResponse = resp.json().await?;
+        Ok(parsed.audio_base64)
     }
 }
 

@@ -283,9 +283,6 @@ function renderChrome(view) {
 
   const netChip = document.getElementById("net-chip");
   netChip.className = "chip " + (state.bridgeReachable ? "chip--accent chip--pulse" : "chip--orange");
-  const keyChip = document.getElementById("key-chip");
-  const hasKey = !!(state.settings && state.settings.openrouterApiKey);
-  keyChip.className = "chip " + (hasKey ? "chip--accent" : "chip--orange");
 
   // Visible from every screen, not just Fleet — "what needs attention and where" shouldn't
   // depend on which pane's conversation happens to be open.
@@ -625,127 +622,19 @@ function renderSettings() {
             <span class="chip__dot"></span>${state.bridgeReachable ? "REACHABLE" : "UNREACHABLE"}
           </span>
         </div>
-        <div class="settings-row">
-          <div class="settings-row__field">
-            <span class="settings-row__field-label">OPENROUTER API KEY</span>
-            <span class="settings-row__field-value">${s.openrouterApiKey ? "•••• " + s.openrouterApiKey.slice(-4) : "not set"}</span>
-          </div>
-          <span class="chip ${s.openrouterApiKey ? "chip--accent" : "chip--orange"}">${s.openrouterApiKey ? "SET" : "MISSING"}</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="settings-section">
-      <div class="settings-section__label">MODELS</div>
-      <div class="card">
-        <div class="settings-row">
-          <div class="settings-row__field" style="width:100%">
-            <span class="settings-row__field-label">RESOLVER · SPOKEN → COMMAND</span>
-            <input type="text" id="f-reply-model" value="${escapeHtml(s.replyModel || "")}" />
-          </div>
-        </div>
-        <div class="settings-row">
-          <div class="settings-row__field" style="width:100%">
-            <span class="settings-row__field-label">SUMMARIZER · OUTPUT → SPEECH</span>
-            <input type="text" id="f-summarize-model" value="${escapeHtml(s.summarizeModel || "")}" />
-          </div>
-        </div>
-        <div class="settings-row">
-          <div class="settings-row__field" style="width:100%">
-            <span class="settings-row__field-label">TTS MODEL</span>
-            <input type="text" id="f-tts-model" value="${escapeHtml(s.ttsModel || "")}" />
-          </div>
-        </div>
-        <div class="settings-row">
-          <div class="settings-row__field" style="width:100%">
-            <span class="settings-row__field-label">TTS VOICE</span>
-            <input type="text" id="f-tts-voice" value="${escapeHtml(s.ttsVoice || "")}" />
-          </div>
-        </div>
-        <div class="settings-row">
-          <div class="settings-row__field" style="width:100%">
-            <span class="settings-row__field-label">TTS AUDIO FORMAT</span>
-            <input type="text" id="f-tts-format" value="${escapeHtml(s.ttsFormat || "")}" />
-          </div>
-        </div>
       </div>
     </div>
 
     <div class="settings-section">
       <div class="settings-section__label">CONNECTION SETUP</div>
+      <p style="font-size:var(--type-meta); color:var(--kv-dim); margin:-4px 0 12px;">
+        model/TTS/voice-toggle settings now live on collie-server itself, not in this app.
+      </p>
       <div class="card">
         <div class="settings-row">
           <div class="settings-row__field" style="width:100%">
             <span class="settings-row__field-label">COLLIE BASE URL</span>
             <input type="text" id="f-collie-url" value="${escapeHtml(s.collieBaseUrl || "")}" />
-          </div>
-        </div>
-        <div class="settings-row">
-          <div class="settings-row__field" style="width:100%">
-            <span class="settings-row__field-label">OPENROUTER API KEY</span>
-            <input type="password" id="f-api-key" value="${escapeHtml(s.openrouterApiKey || "")}" />
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="settings-section">
-      <div class="settings-section__label">KV MANAGER</div>
-      <p style="font-size:var(--type-meta); color:var(--kv-dim); margin:-4px 0 12px;">
-        optional — auto-provisions the OpenRouter key above from kv.osmosis.page instead of
-        pasting one in by hand. Leave blank to just paste a key manually.
-      </p>
-      <div class="card">
-        <div class="settings-row">
-          <div class="settings-row__field" style="width:100%">
-            <span class="settings-row__field-label">KV MANAGER BASE URL</span>
-            <input type="text" id="f-kv-manager-url" value="${escapeHtml(s.kvManagerBaseUrl || "")}" />
-          </div>
-        </div>
-        <div class="settings-row">
-          <div class="settings-row__field" style="width:100%">
-            <span class="settings-row__field-label">KV MANAGER API KEY</span>
-            <input type="password" id="f-kv-manager-key" value="${escapeHtml(s.kvManagerApiKey || "")}" />
-          </div>
-        </div>
-        <div class="settings-row">
-          <div class="settings-row__field" style="width:100%">
-            <span class="settings-row__field-label">KV ENTRY NAME (HOLDS THE OPENROUTER MANAGEMENT KEY)</span>
-            <input type="text" id="f-kv-manager-entry" value="${escapeHtml(s.kvManagerEntryKey || "")}" />
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="settings-section">
-      <div class="settings-section__label">VOICE OUT</div>
-      <p style="font-size:var(--type-meta); color:var(--kv-dim); margin:-4px 0 12px;">
-        every turn is still classified and summarized in the transcript either way — these only
-        control which categories actually get spoken aloud.
-      </p>
-      <div class="card">
-        <div class="settings-row">
-          <label style="display:flex; align-items:center; gap:9px; width:100%;">
-            <input type="checkbox" id="f-speak-success" ${s.speakSuccessReports !== false ? "checked" : ""} />
-            <span style="font-size:var(--type-data); color:var(--kv-ink);">voice success reports</span>
-          </label>
-        </div>
-        <div class="settings-row">
-          <label style="display:flex; align-items:center; gap:9px; width:100%;">
-            <input type="checkbox" id="f-speak-issue" ${s.speakIssueReports !== false ? "checked" : ""} />
-            <span style="font-size:var(--type-data); color:var(--kv-ink);">voice issue reports</span>
-          </label>
-        </div>
-        <div class="settings-row">
-          <label style="display:flex; align-items:center; gap:9px; width:100%;">
-            <input type="checkbox" id="f-speak-decision" ${s.speakDecisionNeeded !== false ? "checked" : ""} />
-            <span style="font-size:var(--type-data); color:var(--kv-ink);">voice decision-needed questions</span>
-          </label>
-        </div>
-        <div class="settings-row">
-          <div class="settings-row__field" style="width:100%">
-            <span class="settings-row__field-label">MAX WORDS PER SPOKEN SUMMARY</span>
-            <input type="text" inputmode="numeric" id="f-tts-max-words" value="${escapeHtml(String(s.ttsMaxWords ?? 40))}" />
           </div>
         </div>
       </div>
@@ -758,19 +647,6 @@ function renderSettings() {
   document.getElementById("save-settings").addEventListener("click", async () => {
     const newSettings = {
       collieBaseUrl: document.getElementById("f-collie-url").value.trim(),
-      openrouterApiKey: document.getElementById("f-api-key").value.trim(),
-      replyModel: document.getElementById("f-reply-model").value.trim(),
-      summarizeModel: document.getElementById("f-summarize-model").value.trim(),
-      ttsModel: document.getElementById("f-tts-model").value.trim(),
-      ttsVoice: document.getElementById("f-tts-voice").value.trim(),
-      ttsFormat: document.getElementById("f-tts-format").value.trim(),
-      kvManagerBaseUrl: document.getElementById("f-kv-manager-url").value.trim(),
-      kvManagerApiKey: document.getElementById("f-kv-manager-key").value.trim(),
-      kvManagerEntryKey: document.getElementById("f-kv-manager-entry").value.trim(),
-      speakSuccessReports: document.getElementById("f-speak-success").checked,
-      speakIssueReports: document.getElementById("f-speak-issue").checked,
-      speakDecisionNeeded: document.getElementById("f-speak-decision").checked,
-      ttsMaxWords: parseInt(document.getElementById("f-tts-max-words").value, 10) || 40,
     };
     const status = document.getElementById("settings-status");
     try {
@@ -820,17 +696,15 @@ async function showBlockedOverlay(pane) {
     optionsEl.appendChild(btn);
   });
 
-  // A blocked pane is exactly a "decision needed" event — same toggle governs both. Speak
-  // exactly what's shown as `question`, not a generic phrase — what's said and what's shown
-  // should be the same text.
-  if (
-    description.question &&
-    state.settings &&
-    state.settings.openrouterApiKey &&
-    state.settings.speakDecisionNeeded !== false
-  ) {
+  // A blocked pane is exactly a "decision needed" event. Speak exactly what's shown as
+  // `question`, not a generic phrase — what's said and what's shown should be the same text.
+  // Note: whether "decision needed" events get spoken at all used to be a local toggle here;
+  // that setting now lives on collie-server (`GET/PUT /api/settings`), out of scope for this
+  // app's UI today — see report. `/api/speak` itself always synthesizes whatever text it's
+  // given, so this always speaks the question.
+  if (description.question) {
     invoke("speak", { text: description.question })
-      .then((audioBase64) => playAudio(audioBase64, state.settings.ttsFormat, description.question))
+      .then((audioBase64) => playAudio(audioBase64, undefined, description.question))
       .catch(() => {});
   }
 }
@@ -893,7 +767,10 @@ async function sendCommand(text, paneIdOverride) {
   if (parseHash().view === "conversation") renderConversation();
 
   try {
-    const audioFormat = state.settings ? state.settings.ttsFormat : "mp3";
+    // collie-server's `/api/speak`/`/api/command`/`/api/supervisor/command` responses don't
+    // report an audio format — `ttsMimeType()` defaults to mp3 (matching collie-server's own
+    // default) when none is given.
+    const audioFormat = undefined;
     let audioBase64;
     if (isSupervisor) {
       const result = await invoke("send_supervisor_command", { text });
@@ -1059,16 +936,6 @@ async function init() {
     state.settings = await invoke("get_settings");
   } catch {
     state.settings = null;
-  }
-  if (state.settings && !state.settings.openrouterApiKey) {
-    // No key cached yet — try to auto-provision one via kv_manager. Silently no-ops (leaves
-    // settings unchanged) if kv_manager isn't configured either; Settings/send flows already
-    // surface "no key" clearly in that case.
-    try {
-      state.settings = await invoke("ensure_openrouter_key");
-    } catch {
-      // ignore — nothing configured to provision from, user pastes a key manually instead
-    }
   }
   renderApp();
   startPolling();
