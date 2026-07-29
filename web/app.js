@@ -122,33 +122,6 @@ function renderWaveform(container, count, playedFraction) {
 
 // ---------- audio playback ----------
 
-// "mp3" alone isn't a real MIME type (should be audio/mpeg) — Android's WebView can silently
-// refuse to decode a data: URI with an unrecognized/non-standard MIME, which was making TTS
-// audio fail 100% of the time with no visible error.
-const TTS_MIME_TYPES = {
-  mp3: "audio/mpeg",
-  mpeg: "audio/mpeg",
-  wav: "audio/wav",
-  ogg: "audio/ogg",
-  opus: "audio/ogg",
-  aac: "audio/aac",
-  flac: "audio/flac",
-};
-
-function ttsMimeType(format) {
-  return TTS_MIME_TYPES[(format || "mp3").toLowerCase()] || "audio/mpeg";
-}
-
-// Android's system WebView has long-standing gaps vs. desktop Chrome around `data:` URIs on
-// <audio>/<video> elements — some OEM/Android-version builds silently refuse to load them even
-// with a correct MIME type. A Blob object URL is the standard, well-supported workaround.
-function base64ToBlob(base64, mimeType) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new Blob([bytes], { type: mimeType });
-}
-
 const MEDIA_ERROR_LABELS = {
   1: "aborted",
   2: "network error",
@@ -228,15 +201,14 @@ function primeAudioPlayback() {
   audio.pause();
 }
 
-let ttsObjectUrl = null;
-
-function playAudio(audioBase64, format, text) {
+// collie-server now serves TTS audio as a real fetchable URL (`/api/audio/:id`) instead of
+// base64 JSON — just point the <audio> element straight at it, resolved against the configured
+// collie-server base URL.
+function playAudio(audioUrl, text) {
   const audio = getTtsAudioElement();
   audio.pause();
-  if (ttsObjectUrl) URL.revokeObjectURL(ttsObjectUrl);
-  const blob = base64ToBlob(audioBase64, ttsMimeType(format));
-  ttsObjectUrl = URL.createObjectURL(blob);
-  audio.src = ttsObjectUrl;
+  const base = ((state.settings && state.settings.collieBaseUrl) || "").replace(/\/$/, "");
+  audio.src = base + audioUrl;
   const bar = document.getElementById("now-playing");
   const wf = document.getElementById("now-playing-waveform");
   const toggle = document.getElementById("now-playing-toggle");
@@ -381,7 +353,7 @@ function turnCardHtml(turn, { linkToDetail }) {
     const catChip = cat ? `<span class="chip ${cat.chip}">${cat.label}</span>` : "";
     // A category can be toggled off in Settings — still classified/summarized for the
     // transcript, just not spoken, so there's no audio to play back.
-    const player = turn.audioBase64
+    const player = turn.audioUrl
       ? `<div class="audio-strip__row">
           <button class="audio-strip__play" data-replay="${turn.id}">▶</button>
           <div class="waveform" id="wf-${turn.id}"></div>
@@ -415,7 +387,7 @@ function turnCardHtml(turn, { linkToDetail }) {
       ${audioHtml}
       ${turn.summary ? `<div class="turn-actions">
         <a href="#/turn/${turn.id}">▸ raw output</a>
-        ${turn.audioBase64 ? `<button class="is-muted" data-replay="${turn.id}">↻ replay</button>` : ""}
+        ${turn.audioUrl ? `<button class="is-muted" data-replay="${turn.id}">↻ replay</button>` : ""}
       </div>` : ""}
     </div>`;
 }
@@ -436,7 +408,7 @@ function renderConversation() {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       const turn = turns.find((t) => t.id === btn.dataset.replay);
-      if (turn && turn.audioBase64) playAudio(turn.audioBase64, turn.audioFormat, turn.summary);
+      if (turn && turn.audioUrl) playAudio(turn.audioUrl, turn.summary);
     });
   });
   screen.querySelectorAll("[data-turn]").forEach((card) => {
@@ -524,7 +496,7 @@ function renderTurnDetail(id) {
   screen.innerHTML = turnCardHtml(turn, { linkToDetail: false }) + detailHtml;
   const replay = screen.querySelector("[data-replay]");
   if (replay) {
-    replay.addEventListener("click", () => turn.audioBase64 && playAudio(turn.audioBase64, turn.audioFormat, turn.summary));
+    replay.addEventListener("click", () => turn.audioUrl && playAudio(turn.audioUrl, turn.summary));
   }
   const wf = document.getElementById(`wf-${turn.id}`);
   if (wf) renderWaveform(wf, 18, null);
@@ -704,7 +676,7 @@ async function showBlockedOverlay(pane) {
   // given, so this always speaks the question.
   if (description.question) {
     invoke("speak", { text: description.question })
-      .then((audioBase64) => playAudio(audioBase64, undefined, description.question))
+      .then((audioUrl) => playAudio(audioUrl, description.question))
       .catch(() => {});
   }
 }
@@ -767,11 +739,7 @@ async function sendCommand(text, paneIdOverride) {
   if (parseHash().view === "conversation") renderConversation();
 
   try {
-    // collie-server's `/api/speak`/`/api/command`/`/api/supervisor/command` responses don't
-    // report an audio format — `ttsMimeType()` defaults to mp3 (matching collie-server's own
-    // default) when none is given.
-    const audioFormat = undefined;
-    let audioBase64;
+    let audioUrl;
     if (isSupervisor) {
       const result = await invoke("send_supervisor_command", { text });
       Object.assign(turn, {
@@ -779,10 +747,9 @@ async function sendCommand(text, paneIdOverride) {
         dispatches: result.dispatches,
         summary: result.summary,
         category: result.category,
-        audioBase64: result.audioBase64,
-        audioFormat,
+        audioUrl: result.audioUrl,
       });
-      audioBase64 = result.audioBase64;
+      audioUrl = result.audioUrl;
     } else {
       const result = await invoke("send_command", { text, paneId: targetPaneId || null });
       const d = result.dispatch;
@@ -795,10 +762,9 @@ async function sendCommand(text, paneIdOverride) {
         rawOutput: d.rawOutput,
         summary: result.summary,
         category: result.category,
-        audioBase64: result.audioBase64,
-        audioFormat,
+        audioUrl: result.audioUrl,
       });
-      audioBase64 = result.audioBase64;
+      audioUrl = result.audioUrl;
       if (!paneIdOverride && !state.currentPaneId) {
         state.currentPaneId = d.paneId;
         localStorage.setItem(CURRENT_PANE_KEY, d.paneId);
@@ -806,7 +772,7 @@ async function sendCommand(text, paneIdOverride) {
     }
     // The backend already decided whether this category should be spoken — an empty string
     // means it was deliberately skipped (toggled off in Settings), not a failure.
-    if (audioBase64) playAudio(audioBase64, turn.audioFormat, turn.summary);
+    if (audioUrl) playAudio(audioUrl, turn.summary);
   } catch (err) {
     Object.assign(turn, { status: "error", error: String(err) });
   }

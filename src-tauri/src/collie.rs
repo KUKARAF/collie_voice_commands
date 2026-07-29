@@ -218,7 +218,7 @@ pub struct PaneDispatchResult {
 pub struct SendCommandResult {
     pub summary: String,
     pub category: String,
-    pub audio_base64: String,
+    pub audio_url: String,
     pub dispatch: PaneDispatchResult,
 }
 
@@ -227,7 +227,7 @@ pub struct SendCommandResult {
 pub struct SupervisorResult {
     pub summary: String,
     pub category: String,
-    pub audio_base64: String,
+    pub audio_url: String,
     pub dispatches: Vec<PaneDispatchResult>,
 }
 
@@ -250,7 +250,7 @@ pub struct BlockedPromptDescription {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SpeakResponse {
-    audio_base64: String,
+    audio_url: String,
 }
 
 pub struct CollieClient {
@@ -390,7 +390,8 @@ impl CollieClient {
     }
 
     /// Synthesizes speech for arbitrary text via collie-server's own OpenRouter TTS
-    /// configuration — returns base64-encoded audio bytes.
+    /// configuration — returns a relative URL (`/api/audio/<id>`) the caller can fetch/play
+    /// directly rather than a base64 blob.
     pub async fn speak(&self, text: &str) -> Result<String> {
         let url = format!("{}/api/speak", self.base_url);
         let resp = self
@@ -402,7 +403,7 @@ impl CollieClient {
             .await?;
         let resp = Self::ensure_success(resp).await?;
         let parsed: SpeakResponse = resp.json().await?;
-        Ok(parsed.audio_base64)
+        Ok(parsed.audio_url)
     }
 }
 
