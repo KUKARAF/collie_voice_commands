@@ -667,18 +667,6 @@ async function showBlockedOverlay(pane) {
     btn.addEventListener("click", () => quickBlockedReply(option.instruction || label));
     optionsEl.appendChild(btn);
   });
-
-  // A blocked pane is exactly a "decision needed" event. Speak exactly what's shown as
-  // `question`, not a generic phrase — what's said and what's shown should be the same text.
-  // Note: whether "decision needed" events get spoken at all used to be a local toggle here;
-  // that setting now lives on collie-server (`GET/PUT /api/settings`), out of scope for this
-  // app's UI today — see report. `/api/speak` itself always synthesizes whatever text it's
-  // given, so this always speaks the question.
-  if (description.question) {
-    invoke("speak", { text: description.question })
-      .then((audioUrl) => playAudio(audioUrl, description.question))
-      .catch(() => {});
-  }
 }
 
 function hideBlockedOverlay() {
