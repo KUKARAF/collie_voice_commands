@@ -8,54 +8,81 @@
     <link rel="stylesheet" href="styles/app.css" />
   </head>
   <body class="kv-scanlines">
-    <header class="app-bar" id="app-bar">
-      <div class="app-bar__row">
-        <div class="app-bar__brand">COLLIE<span class="cursor">_</span></div>
-        <div class="app-bar__actions">
+    <header class="chrome-bar" id="chrome-bar">
+      <div class="chrome-bar__row">
+        <div class="chrome-bar__brand">COLLIE<span class="cursor">_</span></div>
+        <div class="chrome-bar__tabs">
+          <button class="chrome-tab" id="tab-chat" data-view="chat">CHAT</button>
+          <button class="chrome-tab" id="tab-tasks" data-view="tasks">TASKS</button>
+        </div>
+        <div class="chrome-bar__actions">
           <span class="chip chip--orange chip--pulse" id="attention-chip" style="display: none"></span>
           <span class="chip" id="net-chip"><span class="chip__dot"></span>NET</span>
-          <button class="app-bar__gear" id="settings-btn" title="Settings">⚙</button>
+          <button class="chrome-bar__gear" id="settings-btn" title="Settings">⚙</button>
         </div>
-      </div>
-      <div class="talking-to-bar" id="talking-to-bar">
-        <div class="talking-to-bar__pane">
-          <span>&gt;</span>
-          <span class="status-dot status-dot--idle" id="talking-to-dot"></span>
-          <span class="truncate" id="talking-to-name">no pane selected</span>
-        </div>
-        <span class="chip" id="talking-to-status">—</span>
       </div>
     </header>
 
-    <header class="back-header" id="back-header" style="display: none">
-      <button class="back-header__back" id="back-btn">&lt;</button>
-      <div class="back-header__title" id="back-header-title"></div>
-      <span class="chip" id="back-header-chip" style="display: none"></span>
-    </header>
+    <div class="view-track" id="view-track">
+      <section class="view-pane" id="view-chat">
+        <div class="talking-to-bar" id="talking-to-bar">
+          <div class="talking-to-bar__pane">
+            <span>&gt;</span>
+            <span class="status-dot status-dot--idle" id="talking-to-dot"></span>
+            <span class="truncate" id="talking-to-name">no pane selected</span>
+          </div>
+          <span class="chip" id="talking-to-status">—</span>
+        </div>
 
-    <div class="now-playing" id="now-playing" style="display: none">
-      <div class="now-playing__row">
-        <span class="now-playing__label">▶ NOW PLAYING</span>
-        <div class="now-playing__waveform waveform" id="now-playing-waveform"></div>
-        <span class="now-playing__time" id="now-playing-time">0:00</span>
-        <button class="now-playing__toggle" id="now-playing-toggle">❚❚</button>
-      </div>
-      <div class="now-playing__text" id="now-playing-text"></div>
-      <div class="now-playing__error" id="now-playing-error" style="display: none"></div>
+        <header class="back-header" id="back-header" style="display: none">
+          <button class="back-header__back" id="back-btn">&lt;</button>
+          <div class="back-header__title" id="back-header-title"></div>
+          <span class="chip" id="back-header-chip" style="display: none"></span>
+        </header>
+
+        <div class="now-playing" id="now-playing" style="display: none">
+          <div class="now-playing__row">
+            <span class="now-playing__label">▶ NOW PLAYING</span>
+            <div class="now-playing__waveform waveform" id="now-playing-waveform"></div>
+            <span class="now-playing__time" id="now-playing-time">0:00</span>
+            <button class="now-playing__toggle" id="now-playing-toggle">❚❚</button>
+          </div>
+          <div class="now-playing__text" id="now-playing-text"></div>
+          <div class="now-playing__error" id="now-playing-error" style="display: none"></div>
+        </div>
+
+        <main class="screen" id="screen"></main>
+
+        <footer class="input-dock" id="input-dock">
+          <input
+            class="input-dock__field"
+            id="command-input"
+            type="text"
+            placeholder="&gt; dictate a command"
+            autocomplete="off"
+          />
+          <button class="btn btn--lg" id="talk-btn">▮ TALK</button>
+        </footer>
+      </section>
+
+      <section class="view-pane" id="view-tasks">
+        <div id="tasks-new" class="tasks-new">
+          <input id="task-title" class="tasks-new__field" placeholder="new task title..." />
+          <input id="task-desc" class="tasks-new__field" placeholder="description (optional)" />
+          <select id="task-parent" class="tasks-new__field"><option value="">— top-level —</option></select>
+          <button class="btn" id="task-add">ADD</button>
+        </div>
+        <main class="screen" id="tasks-screen"></main>
+      </section>
     </div>
 
-    <main class="screen" id="screen"></main>
-
-    <footer class="input-dock" id="input-dock">
-      <input
-        class="input-dock__field"
-        id="command-input"
-        type="text"
-        placeholder="&gt; dictate a command"
-        autocomplete="off"
-      />
-      <button class="btn btn--lg" id="talk-btn">▮ TALK</button>
-    </footer>
+    <div class="settings-overlay" id="settings-overlay">
+      <header class="back-header">
+        <button class="back-header__back" id="settings-back-btn">&lt;</button>
+        <div class="back-header__title">SETTINGS</div>
+      </header>
+      <main class="screen" id="settings-screen"></main>
+    </div>
 
     <div class="blocked-overlay" id="blocked-overlay">
       <div class="blocked-overlay__backdrop" id="blocked-overlay-backdrop"></div>

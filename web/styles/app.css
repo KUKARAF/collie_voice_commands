@@ -804,3 +804,237 @@ body {
   cursor: pointer;
   text-decoration: underline;
 }
+
+/* ---------- persistent top chrome (brand + chat/tasks tabs + cog) ---------- */
+
+.chrome-bar {
+  flex: 0 0 auto;
+  padding-top: calc(var(--space-4) + env(safe-area-inset-top, 0px));
+  padding-right: var(--space-6);
+  padding-bottom: var(--space-3);
+  padding-left: var(--space-6);
+  border-bottom: var(--border-width) solid var(--border-default);
+}
+
+.chrome-bar__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.chrome-bar__brand {
+  font-family: var(--font-pixel);
+  font-size: var(--type-title);
+  color: var(--kv-accent);
+  text-shadow: var(--glow-accent);
+  flex: 0 0 auto;
+}
+
+.chrome-bar__tabs {
+  display: flex;
+  gap: var(--space-2);
+  flex: 1;
+}
+
+.chrome-tab {
+  font-family: var(--font-pixel);
+  font-size: var(--type-chip);
+  letter-spacing: var(--tracking-pixel);
+  color: var(--kv-dim);
+  background: var(--surface-input);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  padding: var(--space-2) var(--space-4);
+}
+
+.chrome-tab--active {
+  color: var(--kv-accent-ink);
+  background: var(--kv-accent);
+  border-color: var(--kv-accent);
+}
+
+.chrome-bar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+}
+
+.chrome-bar__gear {
+  font-family: var(--font-pixel);
+  font-size: 20px;
+  line-height: 1;
+  color: var(--kv-dim);
+  background: var(--surface-input);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  width: var(--tap-target);
+  height: var(--tap-target);
+  min-width: var(--tap-target);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------- two-view swipe track (chat / tasks) ---------- */
+
+.view-track {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  width: 200%;
+  will-change: transform;
+}
+
+.view-track.is-dragging {
+  transition: none;
+}
+
+.view-track:not(.is-dragging) {
+  transition: transform 220ms ease-out;
+}
+
+.view-pane {
+  width: 50%;
+  flex: 0 0 50%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ---------- tasks view ---------- */
+
+.tasks-new {
+  flex: 0 0 auto;
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-4) var(--space-6);
+  border-bottom: var(--border-width) solid var(--border-default);
+}
+
+.tasks-new__field {
+  flex: 1;
+  min-width: 100px;
+  appearance: none;
+  outline: none;
+  background: var(--surface-input);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-control);
+  padding: var(--space-3) var(--space-3);
+  font-family: var(--font-term);
+  font-size: var(--type-data);
+  color: var(--kv-ink);
+}
+
+.task {
+  background: var(--surface-card);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-card);
+  padding: var(--space-4) var(--space-5);
+}
+
+.task--child {
+  margin-left: var(--space-7);
+  margin-top: var(--space-3);
+  border-left: 2px solid var(--kv-accent);
+}
+
+.task-top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.task-title {
+  font-size: var(--type-body);
+  color: var(--kv-ink);
+}
+
+.task-desc {
+  color: var(--kv-dim);
+  font-size: var(--type-data);
+  margin-top: var(--space-2);
+  white-space: pre-wrap;
+}
+
+.task-meta {
+  color: var(--kv-faint);
+  font-size: var(--type-meta);
+  margin-top: var(--space-2);
+}
+
+.badge {
+  font-family: var(--font-pixel);
+  font-size: var(--type-chip);
+  letter-spacing: var(--tracking-pixel);
+  padding: 3px 6px;
+  border-radius: var(--radius-control);
+  white-space: nowrap;
+}
+
+.badge-pending { color: var(--kv-dim); background: var(--surface-input); }
+.badge-dispatched { color: var(--kv-accent); background: color-mix(in srgb, var(--kv-accent) 15%, transparent); }
+.badge-in_progress { color: var(--kv-orange); background: color-mix(in srgb, var(--kv-orange) 15%, transparent); }
+.badge-blocked { color: var(--kv-danger); background: color-mix(in srgb, var(--kv-danger) 15%, transparent); }
+.badge-done { color: var(--kv-accent); background: color-mix(in srgb, var(--kv-accent) 20%, transparent); }
+.badge-failed { color: var(--kv-danger); background: color-mix(in srgb, var(--kv-danger) 20%, transparent); }
+
+.task-controls {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: var(--space-4);
+}
+
+.task-controls select {
+  padding: var(--space-2) var(--space-2);
+  font-size: var(--type-meta);
+  background: var(--surface-input);
+  color: var(--kv-ink);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-control);
+}
+
+.task-controls button {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--type-meta);
+  font-family: var(--font-term);
+  background: none;
+  border: var(--border-width) solid var(--border-default);
+  color: var(--kv-ink);
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+
+.task-controls button:disabled { opacity: 0.5; cursor: default; }
+
+.task-controls button.danger {
+  border-color: var(--kv-danger);
+  color: var(--kv-danger);
+}
+
+.task-children {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- settings full-screen overlay ---------- */
+
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: none;
+  flex-direction: column;
+  background: var(--kv-bg);
+}
+
+.settings-overlay.is-open {
+  display: flex;
+}

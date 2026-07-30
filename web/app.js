@@ -1,10 +1,12 @@
 const invoke = window.__TAURI__.core.invoke;
+const tauriListen = window.__TAURI__.event.listen;
 
 const SUPERVISOR_ID = "supervisor";
 const TRANSCRIPTS_KEY = "collie_transcripts";
 const CURRENT_PANE_KEY = "collie_current_pane";
 const MAX_TRANSCRIPT = 200;
-const POLL_MS = 6000;
+
+const ACTIVE_VIEW_KEY = "collie_active_view";
 
 const state = {
   settings: null,
@@ -17,6 +19,12 @@ const state = {
   transcripts: loadTranscripts(), // { [paneId | "supervisor"]: Turn[] }
   blockedPane: null, // { paneId, name, prompt } currently shown in the overlay
   dismissedBlocked: new Set(), // paneIds snoozed/dismissed until they clear "blocked"
+  // "chat" | "tasks" — which of the two swipeable view-panes is active. Settings is a separate
+  // full-screen overlay, not a third pane, so it isn't tracked here.
+  activeView: localStorage.getItem(ACTIVE_VIEW_KEY) || "chat",
+  tasks: [], // flat list from list_todos, rendered as a parent/child tree client-side
+  tasksBusy: false, // suppresses auto-refresh while a mutating tasks action is in flight
+  tasksError: null,
 };
 
 // ---------- storage ----------
@@ -244,20 +252,19 @@ function setHash(path) {
   location.hash = path;
 }
 
-window.addEventListener("hashchange", renderApp);
+window.addEventListener("hashchange", () => {
+  renderApp();
+  reportForegroundContext();
+});
 
-// ---------- top chrome (app bar / back header / dock visibility) ----------
+// ---------- top chrome (persistent brand/tabs/cog + per-pane chat header) ----------
 
 function renderChrome(view) {
-  const appBar = document.getElementById("app-bar");
-  const backHeader = document.getElementById("back-header");
-  const dock = document.getElementById("input-dock");
-
   const netChip = document.getElementById("net-chip");
   netChip.className = "chip " + (state.bridgeReachable ? "chip--accent chip--pulse" : "chip--orange");
 
-  // Visible from every screen, not just Fleet — "what needs attention and where" shouldn't
-  // depend on which pane's conversation happens to be open.
+  // Visible from every screen — chrome-bar is persistent above both swipe panes now, so this
+  // was already true, but is finally reachable from Tasks too, not just Chat.
   const attentionChip = document.getElementById("attention-chip");
   const blockedCount = allPanes(state.snapshot).filter((p) => p.status === "blocked").length;
   if (blockedCount > 0) {
@@ -267,13 +274,23 @@ function renderChrome(view) {
     attentionChip.style.display = "none";
   }
 
+  document.getElementById("tab-chat").classList.toggle("chrome-tab--active", state.activeView === "chat");
+  document.getElementById("tab-tasks").classList.toggle("chrome-tab--active", state.activeView === "tasks");
+
+  // Chat-pane-local header: talking-to-bar for the conversation subview, back-header (with a
+  // FLEET/TURN title) for fleet/turn — same behavior as before the swipe restructure, just
+  // scoped inside #view-chat instead of driving the whole page.
+  const talkingToBar = document.getElementById("talking-to-bar");
+  const backHeader = document.getElementById("back-header");
+  const dock = document.getElementById("input-dock");
+
   if (view === "conversation") {
-    appBar.style.display = "";
+    talkingToBar.style.display = "flex";
     backHeader.style.display = "none";
     dock.style.display = "flex";
     updateTalkingToBar();
   } else {
-    appBar.style.display = "none";
+    talkingToBar.style.display = "none";
     backHeader.style.display = "flex";
     dock.style.display = "none";
     const title = document.getElementById("back-header-title");
@@ -281,18 +298,24 @@ function renderChrome(view) {
     chip.style.display = "none";
     if (view === "fleet") {
       title.textContent = "FLEET";
-      const blockedCount = allPanes(state.snapshot).filter((p) => p.status === "blocked").length;
       if (blockedCount > 0) {
         chip.style.display = "inline-flex";
         chip.className = "chip chip--orange chip--pulse";
         chip.innerHTML = `<span class="chip__dot"></span>${blockedCount} BLOCKED`;
       }
-    } else if (view === "settings") {
-      title.textContent = "SETTINGS";
     } else if (view === "turn") {
       title.textContent = "TURN";
     }
   }
+}
+
+function setActiveView(view) {
+  state.activeView = view;
+  localStorage.setItem(ACTIVE_VIEW_KEY, view);
+  document.getElementById("view-track").style.transform = view === "tasks" ? "translateX(-50%)" : "translateX(0)";
+  document.getElementById("tab-chat").classList.toggle("chrome-tab--active", view === "chat");
+  document.getElementById("tab-tasks").classList.toggle("chrome-tab--active", view === "tasks");
+  if (view === "tasks") loadTasks();
 }
 
 function updateTalkingToBar() {
@@ -572,14 +595,240 @@ function wireFleetPaneClicks(screen) {
       state.currentPaneId = row.dataset.pane;
       localStorage.setItem(CURRENT_PANE_KEY, state.currentPaneId);
       setHash("conversation");
+      reportForegroundContext();
     });
+  });
+}
+
+// ---------- tasks view ----------
+//
+// Ports collie-server's static/tasks.html reference UI 1:1 (nested parent/child cards, status
+// badges, create form, split/dispatch/delete buttons, the busy-flag-gates-auto-refresh pattern)
+// onto invoke("list_todos"/"create_todo"/...) instead of fetch, styled with app.css's --kv-*
+// tokens instead of tasks.html's literal hex colors so Chat and Tasks share one visual language.
+
+const TODO_STATUSES = ["pending", "dispatched", "in_progress", "blocked", "done", "failed"];
+
+async function loadTasks() {
+  if (state.tasksBusy) return;
+  try {
+    state.tasks = await invoke("list_todos");
+    state.tasksError = null;
+  } catch (err) {
+    state.tasksError = String(err);
+  }
+  renderTasks();
+}
+
+function paneSelectOptionsHtml(selectedPaneId) {
+  return allPanes(state.snapshot)
+    .map(
+      (p) =>
+        `<option value="${escapeHtml(p.paneId)}" ${String(p.paneId) === String(selectedPaneId) ? "selected" : ""}>${escapeHtml(paneDisplayName(p))} (#${escapeHtml(p.paneId)})</option>`,
+    )
+    .join("");
+}
+
+function renderParentOptions() {
+  const select = document.getElementById("task-parent");
+  const current = select.value;
+  const topLevel = state.tasks.filter((t) => !t.parentId);
+  select.innerHTML =
+    '<option value="">— top-level —</option>' +
+    topLevel.map((t) => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.title)}</option>`).join("");
+  select.value = current;
+}
+
+function renderTasks() {
+  const screen = document.getElementById("tasks-screen");
+  if (state.tasksError) {
+    screen.innerHTML = `<div class="empty-state">failed to load tasks: ${escapeHtml(state.tasksError)}</div>`;
+    return;
+  }
+  renderParentOptions();
+  const byParent = new Map();
+  for (const t of state.tasks) {
+    const key = t.parentId || "";
+    if (!byParent.has(key)) byParent.set(key, []);
+    byParent.get(key).push(t);
+  }
+  const topLevel = byParent.get("") || [];
+  if (topLevel.length === 0) {
+    screen.innerHTML = `<div class="empty-state">no tasks yet — add one above.</div>`;
+    return;
+  }
+  screen.innerHTML = "";
+  for (const t of topLevel) {
+    screen.appendChild(taskCardEl(t, byParent, false));
+  }
+}
+
+function taskCardEl(t, byParent, isChild) {
+  const wrap = document.createElement("div");
+  wrap.className = "task" + (isChild ? " task--child" : "");
+
+  const top = document.createElement("div");
+  top.className = "task-top";
+  top.innerHTML = `<span class="task-title">${escapeHtml(t.title)}</span><span class="badge badge-${t.status}">${t.status}</span>`;
+  wrap.appendChild(top);
+
+  if (t.description) {
+    const desc = document.createElement("div");
+    desc.className = "task-desc";
+    desc.textContent = t.description;
+    wrap.appendChild(desc);
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "task-meta";
+  meta.textContent = `#${t.id.slice(0, 8)}` + (t.assignedPaneId != null ? ` · pane ${t.assignedPaneId}` : "");
+  wrap.appendChild(meta);
+
+  const controls = document.createElement("div");
+  controls.className = "task-controls";
+
+  const statusSelect = document.createElement("select");
+  statusSelect.innerHTML = TODO_STATUSES.map(
+    (s) => `<option value="${s}" ${s === t.status ? "selected" : ""}>${s}</option>`,
+  ).join("");
+  statusSelect.addEventListener("change", () => setTaskStatus(t.id, statusSelect.value));
+  controls.appendChild(statusSelect);
+
+  const splitBtn = document.createElement("button");
+  splitBtn.textContent = "Split";
+  splitBtn.addEventListener("click", () => splitTask(t.id, splitBtn));
+  controls.appendChild(splitBtn);
+
+  const panes = allPanes(state.snapshot);
+  const paneSelect = document.createElement("select");
+  paneSelect.innerHTML = panes.length
+    ? paneSelectOptionsHtml(t.assignedPaneId ?? "")
+    : '<option value="">no panes available</option>';
+  controls.appendChild(paneSelect);
+
+  const dispatchBtn = document.createElement("button");
+  dispatchBtn.textContent = "Dispatch";
+  dispatchBtn.disabled = panes.length === 0;
+  dispatchBtn.addEventListener("click", () => dispatchTask(t.id, paneSelect.value, dispatchBtn));
+  controls.appendChild(dispatchBtn);
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.textContent = "Delete";
+  deleteBtn.className = "danger";
+  deleteBtn.addEventListener("click", () => deleteTask(t.id, deleteBtn));
+  controls.appendChild(deleteBtn);
+
+  wrap.appendChild(controls);
+
+  const children = byParent.get(t.id) || [];
+  if (children.length) {
+    const childrenWrap = document.createElement("div");
+    childrenWrap.className = "task-children";
+    for (const c of children) {
+      childrenWrap.appendChild(taskCardEl(c, byParent, true));
+    }
+    wrap.appendChild(childrenWrap);
+  }
+
+  return wrap;
+}
+
+async function setTaskStatus(id, status) {
+  state.tasksBusy = true;
+  try {
+    await invoke("patch_todo", { id, status });
+  } catch (err) {
+    alert(`Failed to update status: ${err}`);
+  } finally {
+    state.tasksBusy = false;
+    loadTasks();
+  }
+}
+
+async function splitTask(id, btn) {
+  state.tasksBusy = true;
+  btn.disabled = true;
+  btn.textContent = "splitting...";
+  try {
+    await invoke("split_todo", { id });
+  } catch (err) {
+    alert(`Split failed: ${err}`);
+  } finally {
+    state.tasksBusy = false;
+    loadTasks();
+  }
+}
+
+async function dispatchTask(id, paneId, btn) {
+  if (!paneId) {
+    alert("Pick a pane to dispatch to first.");
+    return;
+  }
+  state.tasksBusy = true;
+  btn.disabled = true;
+  btn.textContent = "dispatching...";
+  try {
+    await invoke("dispatch_todo", { id, paneId });
+  } catch (err) {
+    alert(`Dispatch failed: ${err}`);
+  } finally {
+    state.tasksBusy = false;
+    loadTasks();
+  }
+}
+
+async function deleteTask(id, btn) {
+  if (!confirm("Delete this task?")) return;
+  state.tasksBusy = true;
+  btn.disabled = true;
+  try {
+    await invoke("delete_todo", { id });
+  } catch (err) {
+    alert(`Delete failed: ${err}`);
+  } finally {
+    state.tasksBusy = false;
+    loadTasks();
+  }
+}
+
+function wireTasksControls() {
+  const titleInput = document.getElementById("task-title");
+  const descInput = document.getElementById("task-desc");
+  const parentSelect = document.getElementById("task-parent");
+  const addBtn = document.getElementById("task-add");
+
+  const addTask = async () => {
+    const title = titleInput.value.trim();
+    if (!title) return;
+    state.tasksBusy = true;
+    addBtn.disabled = true;
+    try {
+      await invoke("create_todo", {
+        title,
+        description: descInput.value.trim() || null,
+        parentId: parentSelect.value || null,
+      });
+      titleInput.value = "";
+      descInput.value = "";
+    } catch (err) {
+      alert(`Failed to add task: ${err}`);
+    } finally {
+      state.tasksBusy = false;
+      addBtn.disabled = false;
+      loadTasks();
+    }
+  };
+
+  addBtn.addEventListener("click", addTask);
+  titleInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") addTask();
   });
 }
 
 // ---------- settings screen ----------
 
 function renderSettings() {
-  const screen = document.getElementById("screen");
+  const screen = document.getElementById("settings-screen");
   const s = state.settings || {};
   screen.innerHTML = `
     <div class="settings-section">
@@ -612,13 +861,27 @@ function renderSettings() {
       </div>
     </div>
 
+    <div class="settings-section">
+      <div class="settings-section__label">NOTIFICATIONS</div>
+      <div class="card">
+        <div class="settings-row">
+          <div class="settings-row__field" style="width:100%">
+            <span class="settings-row__field-label">ESCALATE TO SPEECH AFTER (SECONDS)</span>
+            <input type="text" inputmode="numeric" id="f-notify-timeout" value="${escapeHtml(String(s.notificationResponseTimeoutSecs ?? 90))}" />
+          </div>
+        </div>
+      </div>
+    </div>
+
     <button class="btn btn--lg" id="save-settings" style="align-self:flex-start">SAVE</button>
     <div class="empty-state" id="settings-status"></div>
   `;
 
   document.getElementById("save-settings").addEventListener("click", async () => {
+    const timeoutRaw = parseInt(document.getElementById("f-notify-timeout").value, 10);
     const newSettings = {
       collieBaseUrl: document.getElementById("f-collie-url").value.trim(),
+      notificationResponseTimeoutSecs: Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : 90,
     };
     const status = document.getElementById("settings-status");
     try {
@@ -692,6 +955,7 @@ function wireBlockedOverlay() {
     localStorage.setItem(CURRENT_PANE_KEY, state.currentPaneId);
     hideBlockedOverlay();
     setHash("conversation");
+    reportForegroundContext();
     document.getElementById("command-input").focus();
   });
 }
@@ -770,34 +1034,73 @@ async function sendCommand(text, paneIdOverride) {
 }
 
 // ---------- polling ----------
+//
+// The 6s poll now runs once, in Rust (monitor.rs's poll_once), so it keeps running whether the
+// app is foregrounded, backgrounded, or the screen is off — that's the whole point of moving it
+// off a JS setInterval. This file only reacts to what Rust reports: `collie://snapshot` fires
+// every cycle with the latest snapshot, and `collie://tts-playing` fires when the monitor
+// escalates a blocked pane to speech. `get_snapshot` stays as an on-demand command for first
+// paint (before the background service has started) and manual refresh.
 
-async function pollSnapshot() {
-  try {
-    const snapshot = await invoke("get_snapshot");
-    state.bridgeReachable = true;
-    state.snapshot = snapshot;
+function applySnapshot(snapshot) {
+  state.bridgeReachable = true;
+  state.snapshot = snapshot;
 
-    for (const pane of allPanes(snapshot)) {
-      const prev = state.prevStatus[pane.paneId];
-      if (pane.status === "blocked" && prev !== "blocked" && !state.dismissedBlocked.has(pane.paneId)) {
-        showBlockedOverlay(pane);
-      }
-      if (pane.status !== "blocked") state.dismissedBlocked.delete(pane.paneId);
-      state.prevStatus[pane.paneId] = pane.status;
+  // The in-webview blocked overlay is only for the pane the user is actively looking at — every
+  // other blocked pane is Rust's job to notify about (monitor.rs's own foreground-suppression
+  // check skips exactly that one pane so this and the OS notification don't double up).
+  for (const pane of allPanes(snapshot)) {
+    const prev = state.prevStatus[pane.paneId];
+    const isViewedInForeground =
+      document.visibilityState === "visible" && pane.paneId === state.currentPaneId && parseHash().view === "conversation";
+    if (
+      pane.status === "blocked" &&
+      prev !== "blocked" &&
+      isViewedInForeground &&
+      !state.dismissedBlocked.has(pane.paneId)
+    ) {
+      showBlockedOverlay(pane);
     }
-  } catch {
-    state.bridgeReachable = false;
+    if (pane.status !== "blocked") state.dismissedBlocked.delete(pane.paneId);
+    state.prevStatus[pane.paneId] = pane.status;
   }
+
   const view = parseHash().view;
   renderChrome(view);
   if (view === "fleet") renderFleet();
+  if (state.activeView === "tasks") loadTasks();
+}
+
+async function fetchSnapshotOnce() {
+  try {
+    applySnapshot(await invoke("get_snapshot"));
+  } catch {
+    state.bridgeReachable = false;
+    renderChrome(parseHash().view);
+  }
 }
 
 function startPolling() {
-  pollSnapshot();
-  setInterval(() => {
-    if (document.visibilityState === "visible") pollSnapshot();
-  }, POLL_MS);
+  fetchSnapshotOnce();
+  tauriListen("collie://snapshot", (event) => applySnapshot(event.payload));
+  tauriListen("collie://tts-playing", (event) => {
+    const { audioUrl, text } = event.payload;
+    playAudio(audioUrl, text);
+  });
+  // Re-check on resume — the OS may have paused JS timers/network while backgrounded, so the
+  // last-known snapshot on screen could be stale by the time the user looks at the app again.
+  document.addEventListener("visibilitychange", () => {
+    reportForegroundContext();
+    if (document.visibilityState === "visible") fetchSnapshotOnce();
+  });
+}
+
+// Tells monitor.rs what the user is currently looking at, so it can skip firing a duplicate OS
+// notification for the one pane already covered by the in-webview blocked overlay.
+function reportForegroundContext() {
+  const visible = document.visibilityState === "visible" && parseHash().view === "conversation";
+  const viewingPaneId = state.currentPaneId !== SUPERVISOR_ID ? state.currentPaneId : null;
+  invoke("set_foreground_context", { visible, viewingPaneId }).catch(() => {});
 }
 
 // ---------- app render dispatch ----------
@@ -807,21 +1110,34 @@ function renderApp() {
   renderChrome(view);
   if (view === "conversation") renderConversation();
   else if (view === "fleet") renderFleet();
-  else if (view === "settings") renderSettings();
   else if (view === "turn") renderTurnDetail(param);
   else setHash("conversation");
+}
+
+// ---------- settings overlay (persistent cog, not a swipe pane) ----------
+
+function openSettings() {
+  renderSettings();
+  document.getElementById("settings-overlay").classList.add("is-open");
+}
+
+function closeSettings() {
+  document.getElementById("settings-overlay").classList.remove("is-open");
 }
 
 // ---------- wiring ----------
 
 function wireGlobalControls() {
-  document.getElementById("settings-btn").addEventListener("click", () => setHash("settings"));
-  document.getElementById("attention-chip").addEventListener("click", () => setHash("fleet"));
-  document.getElementById("back-btn").addEventListener("click", () => {
-    if (parseHash().view === "turn") setHash("conversation");
-    else setHash("conversation");
+  document.getElementById("settings-btn").addEventListener("click", openSettings);
+  document.getElementById("settings-back-btn").addEventListener("click", closeSettings);
+  document.getElementById("attention-chip").addEventListener("click", () => {
+    setActiveView("chat");
+    setHash("fleet");
   });
+  document.getElementById("back-btn").addEventListener("click", () => setHash("conversation"));
   document.getElementById("talking-to-bar").addEventListener("click", () => setHash("fleet"));
+  document.getElementById("tab-chat").addEventListener("click", () => setActiveView("chat"));
+  document.getElementById("tab-tasks").addEventListener("click", () => setActiveView("tasks"));
 
   const input = document.getElementById("command-input");
   const submit = () => {
@@ -839,23 +1155,45 @@ function wireGlobalControls() {
   });
 }
 
-// Swipe in from the right edge to open Settings — a second path to Settings alongside the gear
-// button, for one-handed use where the top-right gear is awkward to reach.
-function wireSwipeToSettings() {
-  const EDGE_PX = 24; // gesture must start within this many px of the right edge
-  const MIN_DELTA_X = 60; // minimum leftward travel to count as a swipe
-  const MAX_DELTA_Y = 80; // too much vertical drift means it's a scroll, not a swipe
+// Horizontal swipe between the Chat and Tasks view-panes — live-tracks the finger while
+// dragging, snaps to whichever pane is closer than a threshold on release. Replaces
+// wireSwipeToSettings outright: settings is reached via the persistent cog now, and running
+// both gesture handlers at once would have them fight over the same touches.
+function wireViewSwipe() {
+  const track = document.getElementById("view-track");
+  const SNAP_FRACTION = 0.25; // fraction of screen width to trigger a view change
   let startX = null;
   let startY = null;
-  let startedAtEdge = false;
+  let dragging = false;
+  let baseOffsetPx = 0; // -window.innerWidth when on "tasks", 0 when on "chat"
 
   document.addEventListener(
     "touchstart",
     (e) => {
+      if (e.touches.length !== 1) return;
       const t = e.touches[0];
       startX = t.clientX;
       startY = t.clientY;
-      startedAtEdge = window.innerWidth - t.clientX <= EDGE_PX;
+      dragging = false;
+      baseOffsetPx = state.activeView === "tasks" ? -window.innerWidth : 0;
+    },
+    { passive: true },
+  );
+
+  document.addEventListener(
+    "touchmove",
+    (e) => {
+      if (startX == null || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      const dx = t.clientX - startX;
+      const dy = Math.abs(t.clientY - startY);
+      if (!dragging) {
+        if (Math.abs(dx) < 10 || dy > Math.abs(dx)) return; // vertical scroll, not a swipe
+        dragging = true;
+        track.classList.add("is-dragging");
+      }
+      const clamped = Math.min(0, Math.max(-window.innerWidth, baseOffsetPx + dx));
+      track.style.transform = `translateX(${clamped}px)`;
     },
     { passive: true },
   );
@@ -863,16 +1201,18 @@ function wireSwipeToSettings() {
   document.addEventListener(
     "touchend",
     (e) => {
-      if (!startedAtEdge || startX == null) return;
+      if (!dragging) {
+        startX = null;
+        return;
+      }
+      track.classList.remove("is-dragging");
       const t = e.changedTouches[0];
       const dx = t.clientX - startX;
-      const dy = Math.abs(t.clientY - startY);
-      if (dx <= -MIN_DELTA_X && dy < MAX_DELTA_Y && parseHash().view !== "settings") {
-        setHash("settings");
-      }
+      const goingToTasks = baseOffsetPx + dx < -window.innerWidth * SNAP_FRACTION;
+      setActiveView(goingToTasks ? "tasks" : "chat");
       startX = null;
       startY = null;
-      startedAtEdge = false;
+      dragging = false;
     },
     { passive: true },
   );
@@ -881,7 +1221,8 @@ function wireSwipeToSettings() {
 async function init() {
   wireGlobalControls();
   wireBlockedOverlay();
-  wireSwipeToSettings();
+  wireViewSwipe();
+  wireTasksControls();
   // Broad safety net: primes audio on literally the first tap anywhere, so a blocked-pane alert
   // that fires from background polling (no gesture of its own) still has a chance to play if
   // the operator has touched the app at all already this session.
@@ -891,8 +1232,35 @@ async function init() {
   } catch {
     state.settings = null;
   }
+  // Consumes a pane id left behind by monitor.rs's take_pending_navigation() if the app was
+  // just opened after a "pane needs you" notification fired — jumps straight to that pane's
+  // chat view via the same pane-switch mechanism wireFleetPaneClicks uses.
+  try {
+    const pendingPaneId = await invoke("take_pending_navigation");
+    if (pendingPaneId) {
+      state.currentPaneId = pendingPaneId;
+      localStorage.setItem(CURRENT_PANE_KEY, pendingPaneId);
+      setActiveView("chat");
+      setHash("conversation");
+    }
+  } catch {
+    // no-op — deep link is a nicety, not required for the app to work
+  }
+  setActiveView(state.activeView);
   renderApp();
   startPolling();
+  reportForegroundContext();
+  // Keeps monitor.rs's poll_once running with the app backgrounded/screen-off — the always-on
+  // notify→escalate pipeline this whole redesign exists for. No npm package: there's no bundler
+  // in this project, so this calls the plugin's raw invoke command directly instead of importing
+  // its guest-js bindings.
+  try {
+    await invoke("plugin:background-service|start", {
+      config: { serviceLabel: "Collie monitoring", foregroundServiceType: "dataSync" },
+    });
+  } catch (err) {
+    console.error("background-service start failed", err);
+  }
 }
 
 init();
