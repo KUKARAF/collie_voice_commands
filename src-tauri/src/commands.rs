@@ -1,8 +1,8 @@
 use tauri::AppHandle;
 
 use crate::collie::{
-    BlockedPromptDescription, CollieClient, PaneReadResponse, SendCommandResult, SnapshotResponse,
-    SupervisorResult,
+    BlockedPromptDescription, CollieClient, PaneDispatchResult, PaneReadResponse,
+    SendCommandResult, SnapshotResponse, SupervisorResult, Todo, TodoStatus,
 };
 use crate::settings::{self, Settings};
 
@@ -91,4 +91,75 @@ pub async fn speak(app: AppHandle, text: String) -> Result<String, String> {
     let settings = settings::load(&app)?;
     let collie = CollieClient::new(settings.collie_base_url);
     collie.speak(&text).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_todos(app: AppHandle) -> Result<Vec<Todo>, String> {
+    let settings = settings::load(&app)?;
+    let collie = CollieClient::new(settings.collie_base_url);
+    collie.list_todos().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_todo(
+    app: AppHandle,
+    title: String,
+    description: Option<String>,
+    parent_id: Option<String>,
+) -> Result<Todo, String> {
+    let settings = settings::load(&app)?;
+    let collie = CollieClient::new(settings.collie_base_url);
+    collie
+        .create_todo(&title, description.as_deref(), parent_id.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn patch_todo(
+    app: AppHandle,
+    id: String,
+    title: Option<String>,
+    description: Option<Option<String>>,
+    status: Option<TodoStatus>,
+) -> Result<Todo, String> {
+    let settings = settings::load(&app)?;
+    let collie = CollieClient::new(settings.collie_base_url);
+    collie
+        .patch_todo(
+            &id,
+            title.as_deref(),
+            description.as_ref().map(|d| d.as_deref()),
+            status,
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_todo(app: AppHandle, id: String) -> Result<(), String> {
+    let settings = settings::load(&app)?;
+    let collie = CollieClient::new(settings.collie_base_url);
+    collie.delete_todo(&id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn split_todo(app: AppHandle, id: String) -> Result<Vec<Todo>, String> {
+    let settings = settings::load(&app)?;
+    let collie = CollieClient::new(settings.collie_base_url);
+    collie.split_todo(&id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn dispatch_todo(
+    app: AppHandle,
+    id: String,
+    pane_id: String,
+) -> Result<PaneDispatchResult, String> {
+    let settings = settings::load(&app)?;
+    let collie = CollieClient::new(settings.collie_base_url);
+    collie
+        .dispatch_todo(&id, &pane_id)
+        .await
+        .map_err(|e| e.to_string())
 }

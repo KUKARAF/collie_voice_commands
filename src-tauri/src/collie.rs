@@ -253,6 +253,37 @@ struct SpeakResponse {
     audio_url: String,
 }
 
+// ---- todo/tasks wire types — mirror collie-server's `src/todo.rs` `Todo`/`TodoStatus` and
+// `src/api.rs` `CreateTodoBody`/`PatchTodoBody`/`DispatchTodoBody` verbatim. Like `CommandBody`
+// above, the request bodies use snake_case keys (`parent_id`, `pane_id`) built by hand via
+// `serde_json::json!` even though `Todo` itself is `camelCase` on the wire — confirmed against
+// collie-server/src/{api,todo}.rs. `assigned_pane_id` really is `Option<i64>`, not a string,
+// unlike pane ids everywhere else in this file — a pre-existing collie-server inconsistency,
+// mirrored here rather than fixed.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TodoStatus {
+    Pending,
+    Dispatched,
+    InProgress,
+    Blocked,
+    Done,
+    Failed,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Todo {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub title: String,
+    pub description: Option<String>,
+    pub status: TodoStatus,
+    pub assigned_pane_id: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 pub struct CollieClient {
     http: reqwest::Client,
     base_url: String,
@@ -404,6 +435,109 @@ impl CollieClient {
         let resp = Self::ensure_success(resp).await?;
         let parsed: SpeakResponse = resp.json().await?;
         Ok(parsed.audio_url)
+    }
+
+    /// `parent`: `None` lists every todo (`?parent=all`), matching this app's one Tasks view
+    /// which renders the full parent/child tree client-side rather than paging by parent.
+    pub async fn list_todos(&self) -> Result<Vec<Todo>> {
+        let url = format!("{}/api/todos?parent=all", self.base_url);
+        let resp = self.http.get(url).send().await?;
+        let resp = Self::ensure_success(resp).await?;
+        Ok(resp.json::<Vec<Todo>>().await?)
+    }
+
+    pub async fn create_todo(
+        &self,
+        title: &str,
+        description: Option<&str>,
+        parent_id: Option<&str>,
+    ) -> Result<Todo> {
+        let url = format!("{}/api/todos", self.base_url);
+        let resp = self
+            .http
+            .post(url)
+            .header("Origin", self.origin())
+            .json(&serde_json::json!({
+                "title": title,
+                "description": description,
+                "parent_id": parent_id,
+            }))
+            .send()
+            .await?;
+        let resp = Self::ensure_success(resp).await?;
+        Ok(resp.json::<Todo>().await?)
+    }
+
+    pub async fn patch_todo(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        description: Option<Option<&str>>,
+        status: Option<TodoStatus>,
+    ) -> Result<Todo> {
+        let url = format!("{}/api/todos/{}", self.base_url, percent_encode(id));
+        let mut body = serde_json::Map::new();
+        if let Some(title) = title {
+            body.insert("title".into(), serde_json::json!(title));
+        }
+        if let Some(description) = description {
+            body.insert("description".into(), serde_json::json!(description));
+        }
+        if let Some(status) = status {
+            body.insert("status".into(), serde_json::json!(status));
+        }
+        let resp = self
+            .http
+            .patch(url)
+            .header("Origin", self.origin())
+            .json(&serde_json::Value::Object(body))
+            .send()
+            .await?;
+        let resp = Self::ensure_success(resp).await?;
+        Ok(resp.json::<Todo>().await?)
+    }
+
+    pub async fn delete_todo(&self, id: &str) -> Result<()> {
+        let url = format!("{}/api/todos/{}", self.base_url, percent_encode(id));
+        let resp = self
+            .http
+            .delete(url)
+            .header("Origin", self.origin())
+            .send()
+            .await?;
+        Self::ensure_success(resp).await?;
+        Ok(())
+    }
+
+    /// Asks collie-server's supervisor to break this todo into child todos — the
+    /// classification/splitting logic all lives server-side (`supervisor::split_todo`).
+    pub async fn split_todo(&self, id: &str) -> Result<Vec<Todo>> {
+        let url = format!("{}/api/todos/{}/split", self.base_url, percent_encode(id));
+        let resp = self
+            .http
+            .post(url)
+            .header("Origin", self.origin())
+            .send()
+            .await?;
+        let resp = Self::ensure_success(resp).await?;
+        Ok(resp.json::<Vec<Todo>>().await?)
+    }
+
+    pub async fn dispatch_todo(&self, id: &str, pane_id: &str) -> Result<PaneDispatchResult> {
+        let url = format!(
+            "{}/api/todos/{}/dispatch",
+            self.base_url,
+            percent_encode(id)
+        );
+        let resp = self
+            .http
+            .post(url)
+            .header("Origin", self.origin())
+            .json(&serde_json::json!({ "pane_id": pane_id }))
+            .send()
+            .await?;
+        let resp = Self::ensure_success(resp).await?;
+        Ok(resp.json::<PaneDispatchResult>().await?)
     }
 }
 
