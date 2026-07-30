@@ -11,12 +11,25 @@ use tauri::{AppHandle, Manager};
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub collie_base_url: String,
+    /// How long a fired "pane needs you" notification waits for a response before the monitor
+    /// escalates to speaking the question aloud via TTS. Long enough that a normal glance-and-
+    /// respond doesn't false-escalate, short enough to matter for the walking/driving/hands-busy
+    /// case this whole feature exists for. `#[serde(default)]` so existing on-disk
+    /// `settings.json` files without this field (written before this setting existed) still
+    /// parse instead of failing to load.
+    #[serde(default = "default_notification_response_timeout_secs")]
+    pub notification_response_timeout_secs: u32,
+}
+
+fn default_notification_response_timeout_secs() -> u32 {
+    90
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             collie_base_url: "https://thinkpad.sparidae-chinstrap.ts.net".into(),
+            notification_response_timeout_secs: default_notification_response_timeout_secs(),
         }
     }
 }

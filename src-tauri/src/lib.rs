@@ -1,10 +1,17 @@
 mod collie;
 mod commands;
+mod monitor;
 mod settings;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_background_service::init_with_service(|| {
+            monitor::Monitor::new()
+        }))
+        .manage(monitor::MonitorState::default())
+        .manage(monitor::ForegroundContext::default())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -24,6 +31,14 @@ pub fn run() {
             commands::read_pane,
             commands::speak,
             commands::describe_blocked_prompt,
+            commands::list_todos,
+            commands::create_todo,
+            commands::patch_todo,
+            commands::delete_todo,
+            commands::split_todo,
+            commands::dispatch_todo,
+            monitor::set_foreground_context,
+            monitor::take_pending_navigation,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
