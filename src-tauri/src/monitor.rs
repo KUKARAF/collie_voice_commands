@@ -59,7 +59,7 @@ struct ForegroundContextInner {
 
 impl ForegroundContext {
     fn suppresses(&self, pane_id: &str) -> bool {
-        let ctx = self.inner.lock().unwrap();
+        let ctx = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         ctx.visible && ctx.viewing_pane_id.as_deref() == Some(pane_id)
     }
 }
@@ -70,14 +70,14 @@ pub fn set_foreground_context(
     visible: bool,
     viewing_pane_id: Option<String>,
 ) {
-    let mut ctx = foreground.inner.lock().unwrap();
+    let mut ctx = foreground.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     ctx.visible = visible;
     ctx.viewing_pane_id = viewing_pane_id;
 }
 
 #[tauri::command]
 pub fn take_pending_navigation(monitor: tauri::State<MonitorState>) -> Option<String> {
-    monitor.pending_navigation.lock().unwrap().take()
+    monitor.pending_navigation.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
 }
 
 pub struct Monitor;
@@ -148,7 +148,7 @@ pub async fn poll_once(
             continue;
         }
         let pane_id = pane.pane_id.clone();
-        let already_tracked = monitor.panes.lock().unwrap().contains_key(&pane_id);
+        let already_tracked = monitor.panes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains_key(&pane_id);
 
         if !already_tracked {
             let question = match collie.describe_blocked_prompt(&pane_id).await {
@@ -158,7 +158,7 @@ pub async fn poll_once(
                     continue;
                 }
             };
-            monitor.panes.lock().unwrap().insert(
+            monitor.panes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(
                 pane_id.clone(),
                 PaneAlertState {
                     notified_at: Instant::now(),
@@ -169,7 +169,7 @@ pub async fn poll_once(
             if !foreground.suppresses(&pane_id) {
                 let name = crate::collie::pane_display_name(pane);
                 notifier.show(&format!("{name} needs you"), &question);
-                *monitor.pending_navigation.lock().unwrap() = Some(pane_id.clone());
+                *monitor.pending_navigation.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(pane_id.clone());
             }
             continue;
         }
@@ -179,19 +179,20 @@ pub async fn poll_once(
         // blocked and walked away with the app still open in the background should still get
         // the audible escalation.
         let should_escalate = {
-            let mut panes = monitor.panes.lock().unwrap();
-            let state = panes.get_mut(&pane_id).unwrap();
-            !state.escalated && state.notified_at.elapsed() >= timeout
+            let mut panes = monitor.panes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            match panes.get_mut(&pane_id) {
+                Some(state) => !state.escalated && state.notified_at.elapsed() >= timeout,
+                None => false,
+            }
         };
         if should_escalate {
-            let question = monitor
-                .panes
-                .lock()
-                .unwrap()
-                .get(&pane_id)
-                .unwrap()
-                .question
-                .clone();
+            let question = {
+                let panes = monitor.panes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                match panes.get(&pane_id) {
+                    Some(state) => state.question.clone(),
+                    None => continue,
+                }
+            };
             match collie.speak(&question).await {
                 Ok(audio_url) => {
                     // Mirror UI state if the app happens to be open; JS's existing playAudio()
@@ -207,7 +208,7 @@ pub async fn poll_once(
                         "collie://tts-playing",
                         serde_json::json!({ "paneId": pane_id, "audioUrl": audio_url, "text": question }),
                     );
-                    if let Some(state) = monitor.panes.lock().unwrap().get_mut(&pane_id) {
+                    if let Some(state) = monitor.panes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_mut(&pane_id) {
                         state.escalated = true;
                     }
                 }
@@ -219,7 +220,7 @@ pub async fn poll_once(
     monitor
         .panes
         .lock()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .retain(|pane_id, _| blocked_ids.contains(pane_id));
 
     Ok(())

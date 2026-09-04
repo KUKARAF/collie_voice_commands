@@ -4,7 +4,7 @@ mod monitor;
 mod settings;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run() -> anyhow::Result<()> {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_background_service::init_with_service(|| {
@@ -40,6 +40,6 @@ pub fn run() {
             monitor::set_foreground_context,
             monitor::take_pending_navigation,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!())?;
+    Ok(())
 }
